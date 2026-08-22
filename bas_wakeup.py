@@ -780,7 +780,7 @@ def wait_until_running(
 
 
 # ============================================================
-# 完全模拟手动点击，捕获新标签页并等待 IDE 渲染
+# 模拟手动点击 Dev Space 名称 (nedo) 并唤醒开发环境
 # ============================================================
 
 def open_workspace(
@@ -790,62 +790,72 @@ def open_workspace(
     workspace
 ):
     log("==========================================")
-    log(f"准备模拟手动点击进入空间：[{DEVSPACE_NAME}]")
+    log(f"开始模拟手动点击 Dev Space 名称：[{DEVSPACE_NAME}]...")
 
     try:
-        # 1. 确保停留在 BAS 主控制台页面
+        # 1. 打开 BAS 控制台主页
         index_url = BAS_URL + "/index.html"
+        log(f"打开 BAS 主页：{index_url}")
         page.goto(index_url, wait_until="domcontentloaded", timeout=60000)
-        page.wait_for_timeout(5000)
+        
+        # 留出 8 秒等待 SAP UI5 动态卡片列表渲染完成
+        page.wait_for_timeout(8000)
 
-        # 2. 准备捕获点击空间后弹出的“新标签页”
-        log("寻找空间卡片并监听新标签页的弹出...")
-        
-        # 尝试匹配空间名称的链接
-        selector = f'a:has-text("{DEVSPACE_NAME}")'
-        
-        # 等待该链接出现并确保可点击
-        page.wait_for_selector(selector, timeout=30000)
-        
-        # 核心修复点：SAP BAS 会在新窗口打开 IDE，必须捕获 new_page
-        with context.expect_page() as new_page_info:
-            page.locator(selector).first.click()
-            
-        ide_page = new_page_info.value
-        
-        log("成功捕获 IDE 新标签页！开始等待环境初始化...")
+        log(f"正在主页寻找 [{DEVSPACE_NAME}] 卡片并执行点击...")
 
-        # 3. 在新标签页中等待“配置开发环境”及最终 IDE 界面加载
-        # 这里把超时时间拉长到 120 秒，因为启动 IDE 往往需要较长时间
-        ide_page.wait_for_load_state("domcontentloaded", timeout=120000)
-        
-        log("正在等待 IDE 编辑器核心组件 (Monaco/Theia) 出现...")
-        
+        target_page = None
+
+        # 2. 监听点击空间后弹出的新标签页，并用 JS 穿透 Shadow DOM 进行精准点击
         try:
-            # 匹配 VS Code 或 Theia 的核心 UI 元素，证明界面真的进去了
-            ide_page.wait_for_selector(
-                "#theia-app-shell, #monaco-workbench, .monaco-workbench", 
-                timeout=60000
-            )
-            log("IDE 界面渲染成功！")
+            with context.expect_page(timeout=15000) as new_page_info:
+                clicked = page.evaluate(
+                    f'''() => {{
+                        function findAndClick(root) {{
+                            const nodes = root.querySelectorAll('*');
+                            for (let node of nodes) {{
+                                if (node.shadowRoot) {{
+                                    if (findAndClick(node.shadowRoot)) return true;
+                                }}
+                                // 匹配你的空间名称 nedo
+                                if (node.textContent && node.textContent.trim() === "{DEVSPACE_NAME}") {{
+                                    // 找到后寻找最外层的可点击容器或直接点击节点
+                                    const target = node.closest('a, button, ui5-card, ui5-link, [role="button"]') || node;
+                                    target.click();
+                                    return true;
+                                }}
+                            }}
+                            return false;
+                        }}
+                        return findAndClick(document.body);
+                    }}'''
+                )
+
+                if clicked:
+                    log("成功通过 Shadow DOM 点击空间名称！")
+                else:
+                    log("未找到空间名称节点，尝试常规 Selector 点击...")
+                    page.locator(f'text="{DEVSPACE_NAME}"').first.click()
+
+            # 捕获弹出的 IDE 新页面
+            target_page = new_page_info.value
+            log("成功捕获弹出的开发环境新标签页！")
+
         except Exception:
-            log("IDE 核心组件等待超时，强行继续...")
+            log("未检测到新窗口，将在当前页面继续等待加载...")
+            target_page = page
 
-        # 4. 留出充足的缓冲时间，让系统的 .bashrc 跑完节点启动命令
-        log("保持页面活跃 30 秒，确保节点程序完全拉起并建立连接...")
-        ide_page.wait_for_timeout(30000)
-
-        # 5. 发送快捷键激活终端 (双保险)
-        log("发送快捷键 Ctrl + ` 激活终端会话...")
-        ide_page.keyboard.press("Control+Backquote")
-        ide_page.wait_for_timeout(10000)
-
-        log(f"空间环境初始化彻底完成，当前 IDE 地址：{ide_page.url}")
+        # 3. 等待开发环境（IDE）核心挂载及初始化
+        log("正在等待开发环境完成加载并运行启动节点命令...")
         
+        # 关键步骤：留出 35 秒，确保 IDE 渲染完成并触发你的自动运行节点脚本
+        target_page.wait_for_timeout(35000)
+
+        log(f"开发环境唤醒完成！当前页面地址：{target_page.url}")
+        log("==========================================")
         return True
 
     except Exception as e:
-        log(f"进入开发环境过程失败：{e}")
+        log(f"打开开发环境过程失败：{e}")
         return False
 
 
