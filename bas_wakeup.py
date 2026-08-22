@@ -783,81 +783,135 @@ def wait_until_running(
 # 模拟手动点击 Dev Space 名称 (nedo) 并唤醒开发环境
 # ============================================================
 
-def open_workspace(
-    page,
-    context,
-    jwt,
-    workspace
-):
-    log("==========================================")
-    log(f"开始模拟手动点击 Dev Space 名称：[{DEVSPACE_NAME}]...")
+def open_dev_space(page, dev_space_name="nedo"):
+    """
+    自动点击 BAS Dev Space Manager 中的 Dev Space 名称，
+    模拟人工点击 nedo 进入 BAS Workspace。
+    """
 
+    print(f"[BAS] 准备打开 Dev Space: {dev_space_name}")
+
+    # 等待 Dev Space Manager 页面加载
+    page.wait_for_load_state("domcontentloaded", timeout=60000)
+
+    # 给 BAS 页面一点时间渲染
+    page.wait_for_timeout(3000)
+
+    # --------------------------------------------------
+    # 方法 1：直接按 Dev Space 名称点击
+    # --------------------------------------------------
     try:
-        # 1. 打开 BAS 控制台主页
-        index_url = BAS_URL + "/index.html"
-        log(f"打开 BAS 主页：{index_url}")
-        page.goto(index_url, wait_until="domcontentloaded", timeout=60000)
-        
-        # 留出 8 秒等待 SAP UI5 动态卡片列表渲染完成
-        page.wait_for_timeout(8000)
+        locator = page.get_by_text(dev_space_name, exact=True)
 
-        log(f"正在主页寻找 [{DEVSPACE_NAME}] 卡片并执行点击...")
+        if locator.count() > 0:
+            print(f"[BAS] 找到 Dev Space: {dev_space_name}")
 
-        target_page = None
+            # 确保元素可见
+            locator.first.wait_for(state="visible", timeout=30000)
 
-        # 2. 监听点击空间后弹出的新标签页，并用 JS 穿透 Shadow DOM 进行精准点击
-        try:
-            with context.expect_page(timeout=15000) as new_page_info:
-                clicked = page.evaluate(
-                    f'''() => {{
-                        function findAndClick(root) {{
-                            const nodes = root.querySelectorAll('*');
-                            for (let node of nodes) {{
-                                if (node.shadowRoot) {{
-                                    if (findAndClick(node.shadowRoot)) return true;
-                                }}
-                                // 匹配你的空间名称 nedo
-                                if (node.textContent && node.textContent.trim() === "{DEVSPACE_NAME}") {{
-                                    // 找到后寻找最外层的可点击容器或直接点击节点
-                                    const target = node.closest('a, button, ui5-card, ui5-link, [role="button"]') || node;
-                                    target.click();
-                                    return true;
-                                }}
-                            }}
-                            return false;
-                        }}
-                        return findAndClick(document.body);
-                    }}'''
-                )
+            print(f"[BAS] 正在点击 Dev Space: {dev_space_name}")
 
-                if clicked:
-                    log("成功通过 Shadow DOM 点击空间名称！")
-                else:
-                    log("未找到空间名称节点，尝试常规 Selector 点击...")
-                    page.locator(f'text="{DEVSPACE_NAME}"').first.click()
+            locator.first.click()
 
-            # 捕获弹出的 IDE 新页面
-            target_page = new_page_info.value
-            log("成功捕获弹出的开发环境新标签页！")
+            print("[BAS] 已点击 Dev Space，等待 BAS Workspace 打开...")
 
-        except Exception:
-            log("未检测到新窗口，将在当前页面继续等待加载...")
-            target_page = page
+            page.wait_for_timeout(5000)
 
-        # 3. 等待开发环境（IDE）核心挂载及初始化
-        log("正在等待开发环境完成加载并运行启动节点命令...")
-        
-        # 关键步骤：留出 35 秒，确保 IDE 渲染完成并触发你的自动运行节点脚本
-        target_page.wait_for_timeout(35000)
-
-        log(f"开发环境唤醒完成！当前页面地址：{target_page.url}")
-        log("==========================================")
-        return True
+            return True
 
     except Exception as e:
-        log(f"打开开发环境过程失败：{e}")
-        return False
+        print(f"[BAS] 直接点击 Dev Space 失败: {e}")
 
+    # --------------------------------------------------
+    # 方法 2：如果名称是链接，使用 locator
+    # --------------------------------------------------
+    try:
+        locator = page.locator("a").filter(has_text=dev_space_name)
+
+        if locator.count() > 0:
+            print(f"[BAS] 找到 Dev Space 链接: {dev_space_name}")
+
+            locator.first.wait_for(state="visible", timeout=30000)
+
+            locator.first.click()
+
+            print("[BAS] 已点击 Dev Space 链接，等待 Workspace...")
+
+            page.wait_for_timeout(5000)
+
+            return True
+
+    except Exception as e:
+        print(f"[BAS] 链接方式点击失败: {e}")
+
+    # --------------------------------------------------
+    # 方法 3：最后尝试文本 XPath
+    # --------------------------------------------------
+    try:
+        locator = page.locator(
+            f"//*[normalize-space(text())='{dev_space_name}']"
+        )
+
+        if locator.count() > 0:
+            print(f"[BAS] XPath 找到 Dev Space: {dev_space_name}")
+
+            locator.first.wait_for(state="visible", timeout=30000)
+
+            locator.first.click()
+
+            print("[BAS] XPath 点击成功，等待 Workspace...")
+
+            page.wait_for_timeout(5000)
+
+            return True
+
+    except Exception as e:
+        print(f"[BAS] XPath 点击失败: {e}")
+
+    print(f"[BAS] ERROR: 找不到 Dev Space: {dev_space_name}")
+
+    return False
+
+# ==================================================
+# Dev Space 已经 RUNNING
+# 自动模拟人工点击 Dev Space 名称
+# ==================================================
+
+   print("[BAS] Dev Space 已经 RUNNING")
+
+   success = open_dev_space(page, "nedo")
+
+   if success:
+        print("[BAS] Dev Space 打开成功")
+   else:
+         print("[BAS] Dev Space 打开失败")
+         sys.exit(1)
+
+
+   print("[BAS] 等待 BAS Workspace 初始化...")
+
+   for i in range(60):
+        try:
+            print(f"[BAS] Workspace 初始化等待 {i + 1}/60")
+
+            page.wait_for_timeout(5000)
+
+        # 获取当前页面信息
+           title = page.title()
+           url = page.url
+
+           print(f"[BAS] URL   : {url}")
+           print(f"[BAS] TITLE : {title}")
+
+        # 如果已经进入 BAS Workspace
+           if "business application studio" in title.lower():
+               print("[BAS] BAS Workspace 已加载")
+               break
+
+    except Exception as e:
+        print(f"[BAS] 等待 Workspace: {e}")
+else:
+     print("[BAS] Workspace 初始化超时")
 
 # ============================================================
 # 主程序
