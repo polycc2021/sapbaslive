@@ -28,6 +28,9 @@ DEVSPACE_ID = os.getenv(
     "ws-20y5a"
 )
 
+# 新增：直接指向项目开发环境的完整直链
+BAS_PROJECT_URL = os.getenv("BAS_PROJECT_URL")
+
 
 # ============================================================
 # 日志
@@ -777,7 +780,7 @@ def wait_until_running(
 
 
 # ============================================================
-# 打开 Workspace 并触发 Web Shell / 启动脚本
+# 打开 Workspace 并直连打开 Project 开发环境
 # ============================================================
 
 def open_workspace(
@@ -787,17 +790,24 @@ def open_workspace(
     workspace
 ):
 
-    runtime = workspace.get(
-        "runtime",
-        {}
-    )
+    # 1. 优先读取 Secrets 中的项目直链 URL
+    workspace_url = BAS_PROJECT_URL
 
-    workspace_url = (
-        runtime
-        .get("url", {})
-        .get("theia")
-    )
+    # 2. 若未配置直链，尝试从 API 响应中提取 theia URL
+    if not workspace_url:
 
+        runtime = workspace.get(
+            "runtime",
+            {}
+        )
+
+        workspace_url = (
+            runtime
+            .get("url", {})
+            .get("theia")
+        )
+
+    # 3. 兜底 URL
     if not workspace_url:
 
         workspace_url = (
@@ -807,25 +817,28 @@ def open_workspace(
         )
 
     log(
-        "打开 Dev Space Workspace 并激活 Web Shell..."
+        "=========================================="
     )
 
     log(
-        f"Workspace URL：{workspace_url}"
+        "正在直连打开 Project 开发环境..."
+    )
+
+    log(
+        f"目标 URL：{workspace_url}"
     )
 
     try:
 
-        # 1. 打开 IDE 页面
+        # 打开 IDE 项目页面
         page.goto(
             workspace_url,
             wait_until="domcontentloaded",
             timeout=120000
         )
 
-        log("等待 Web IDE 界面 DOM 加载完成...")
+        log("等待 Web IDE 界面与项目框架加载完成...")
 
-        # 2. 等待 IDE 框架元素渲染 (Theia / VS Code 核心 Shell)
         try:
 
             page.wait_for_selector(
@@ -839,22 +852,23 @@ def open_workspace(
 
             log("IDE 主界面等待超时，强行继续进行下一步触发...")
 
-        page.wait_for_timeout(5000)
+        # 留出 10 秒供 IDE 加载项目文件与 Web Socket 通信
+        page.wait_for_timeout(10000)
 
-        # 3. 模拟快捷键 Ctrl + ` 强行唤醒/打开 Terminal 窗口，建立后端 WebSocket 会话
+        # 发送快捷键 Ctrl + ` 建立终端会话
         log("发送快捷键 Ctrl + ` 触发激活后台 Shell 进程...")
 
         page.keyboard.press("Control+Backquote")
 
-        # 4. 留出 15 秒供终端建立连接并跑完 start.sh 及 .vscode/tasks.json
-        page.wait_for_timeout(15000)
+        # 留出 20 秒供 Terminal 跑完 start.sh 并连接隧道
+        page.wait_for_timeout(20000)
 
         log(
             f"Workspace 当前页面：{page.url}"
         )
 
         log(
-            "Workspace 访问完成，Web Shell 与自动任务已成功激活联动！"
+            "项目开发环境加载完成，Web Shell 与节点程序已成功唤醒！"
         )
 
         return True
@@ -899,6 +913,12 @@ def main():
     log(
         f"Dev Space ID : {DEVSPACE_ID}"
     )
+
+    if BAS_PROJECT_URL:
+
+        log(
+            f"Project URL  : {BAS_PROJECT_URL}"
+        )
 
     with sync_playwright() as p:
 
