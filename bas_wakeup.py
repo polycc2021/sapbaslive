@@ -789,95 +789,45 @@ def open_workspace(
     jwt,
     workspace
 ):
+    # 优先读取直链，如果没配置则自动回退到默认 IDE 路由
+    target_url = BAS_PROJECT_URL
 
-    # 1. 优先读取 Secrets 中的项目直链 URL
-    workspace_url = BAS_PROJECT_URL
+    if not target_url:
+        runtime = workspace.get("runtime", {})
+        target_url = runtime.get("url", {}).get("theia") or f"{BAS_URL}/{DEVSPACE_ID}"
 
-    # 2. 若未配置直链，尝试从 API 响应中提取 theia URL
-    if not workspace_url:
-
-        runtime = workspace.get(
-            "runtime",
-            {}
-        )
-
-        workspace_url = (
-            runtime
-            .get("url", {})
-            .get("theia")
-        )
-
-    # 3. 兜底 URL
-    if not workspace_url:
-
-        workspace_url = (
-            BAS_URL
-            + "/"
-            + DEVSPACE_ID
-        )
-
-    log(
-        "=========================================="
-    )
-
-    log(
-        "正在直连打开 Project 开发环境..."
-    )
-
-    log(
-        f"目标 URL：{workspace_url}"
-    )
+    log("==========================================")
+    log("正在通过直链直接打开 Dev Space 项目开发环境...")
+    log(f"Target URL: {target_url}")
 
     try:
 
-        # 打开 IDE 项目页面
+        # 1. 浏览器直接跳转至你的项目开发环境
         page.goto(
-            workspace_url,
+            target_url,
             wait_until="domcontentloaded",
             timeout=120000
         )
 
-        log("等待 Web IDE 界面与项目框架加载完成...")
+        log("已打开项目页面，等待 Web IDE 框架与项目文件加载...")
 
-        try:
+        # 2. 留出 25 秒让编辑器核心框架（Theia/VS Code）完全挂载
+        page.wait_for_timeout(25000)
 
-            page.wait_for_selector(
-                "#theia-app-shell, #monaco-workbench, .monaco-workbench",
-                timeout=45000
-            )
-
-            log("Web IDE 界面渲染成功！")
-
-        except Exception:
-
-            log("IDE 主界面等待超时，强行继续进行下一步触发...")
-
-        # 留出 10 秒供 IDE 加载项目文件与 Web Socket 通信
-        page.wait_for_timeout(10000)
-
-        # 发送快捷键 Ctrl + ` 建立终端会话
-        log("发送快捷键 Ctrl + ` 触发激活后台 Shell 进程...")
-
+        # 3. 模拟快捷键 Ctrl + ` 唤醒后端 Terminal 会话
+        log("发送快捷键 Ctrl + ` 建立终端连接...")
         page.keyboard.press("Control+Backquote")
 
-        # 留出 20 秒供 Terminal 跑完 start.sh 并连接隧道
+        # 4. 留出 20 秒供 Terminal 跑完 start.sh 并连接 Cloudflare 隧道
         page.wait_for_timeout(20000)
 
-        log(
-            f"Workspace 当前页面：{page.url}"
-        )
-
-        log(
-            "项目开发环境加载完成，Web Shell 与节点程序已成功唤醒！"
-        )
+        log(f"项目开发环境加载成功！当前页面地址：{page.url}")
 
         return True
 
     except Exception as e:
 
-        log(
-            f"打开 Workspace 提示：{e}"
-        )
+        log(f"打开项目开发环境提示：{e}")
 
         return False
 
