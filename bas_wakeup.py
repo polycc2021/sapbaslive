@@ -28,9 +28,6 @@ DEVSPACE_ID = os.getenv(
     "ws-20y5a"
 )
 
-# 新增：直接指向项目开发环境的完整直链
-BAS_PROJECT_URL = os.getenv("BAS_PROJECT_URL")
-
 
 # ============================================================
 # 日志
@@ -780,7 +777,7 @@ def wait_until_running(
 
 
 # ============================================================
-# 打开 Workspace 并直连打开 Project 开发环境
+# 打开 Workspace 并触发 Web Shell / 启动脚本
 # ============================================================
 
 def open_workspace(
@@ -789,45 +786,97 @@ def open_workspace(
     jwt,
     workspace
 ):
-    # 优先读取直链，如果没配置则自动回退到默认 IDE 路由
-    target_url = BAS_PROJECT_URL
 
-    if not target_url:
-        runtime = workspace.get("runtime", {})
-        target_url = runtime.get("url", {}).get("theia") or f"{BAS_URL}/{DEVSPACE_ID}"
+    runtime = workspace.get(
+        "runtime",
+        {}
+    )
 
-    log("==========================================")
-    log("正在通过直链直接打开 Dev Space 项目开发环境...")
-    log(f"Target URL: {target_url}")
+    workspace_url = (
+        runtime
+        .get("url", {})
+        .get("theia")
+    )
 
+    # 如果 API 没有提供 URL，使用空间专属路由
+    if not workspace_url:
+
+        workspace_url = (
+            BAS_URL
+            + "/"
+            + DEVSPACE_ID
+        )
+
+    log(
+        "打开 Dev Space Workspace 并激活 Web Shell..."
+    )
+
+    log(
+        f"Workspace URL：{workspace_url}"
+    )
+
+    # --------------------------------------------------------
+    # 1. API 穿透触发：直接请求 Dev Space 实例路由
+    # --------------------------------------------------------
     try:
 
-        # 1. 浏览器直接跳转至你的项目开发环境
+        log("发送 AppRouter 会话激活 API 请求...")
+
+        headers = {
+            "X-Approuter-Authorization": f"Bearer {jwt}",
+            "Authorization": f"Bearer {jwt}"
+        }
+
+        context.request.get(
+            f"{BAS_URL}/{DEVSPACE_ID}",
+            headers=headers,
+            timeout=30000
+        )
+
+        context.request.get(
+            f"{BAS_URL}/ws-manager/api/v1/workspace/{DEVSPACE_ID}/instance",
+            headers=headers,
+            timeout=30000
+        )
+
+        log("API 触发请求已成功发出。")
+
+    except Exception as e:
+
+        log(f"API 触发提示（不影响后续页面加载）：{e}")
+
+    # --------------------------------------------------------
+    # 2. 浏览器打开 Web IDE 并留出 Shell 挂载初始化时间
+    # --------------------------------------------------------
+    try:
+
         page.goto(
-            target_url,
+            workspace_url,
             wait_until="domcontentloaded",
             timeout=120000
         )
 
-        log("已打开项目页面，等待 Web IDE 框架与项目文件加载...")
+        # 保持页面打开 20 秒，让 AppRouter 与后台 Terminal / Web Shell 完全完成初始化
+        # 此时会触发容器读取 ~/.bashrc 并运行 ~/my-node/start.sh
+        page.wait_for_timeout(
+            20000
+        )
 
-        # 2. 留出 25 秒让编辑器核心框架（Theia/VS Code）完全挂载
-        page.wait_for_timeout(25000)
+        log(
+            f"Workspace 当前页面：{page.url}"
+        )
 
-        # 3. 模拟快捷键 Ctrl + ` 唤醒后端 Terminal 会话
-        log("发送快捷键 Ctrl + ` 建立终端连接...")
-        page.keyboard.press("Control+Backquote")
-
-        # 4. 留出 20 秒供 Terminal 跑完 start.sh 并连接 Cloudflare 隧道
-        page.wait_for_timeout(20000)
-
-        log(f"项目开发环境加载成功！当前页面地址：{page.url}")
+        log(
+            "Workspace 访问完成，Web Shell 已激活联动！"
+        )
 
         return True
 
     except Exception as e:
 
-        log(f"打开项目开发环境提示：{e}")
+        log(
+            f"打开 Workspace 失败：{e}"
+        )
 
         return False
 
@@ -863,12 +912,6 @@ def main():
     log(
         f"Dev Space ID : {DEVSPACE_ID}"
     )
-
-    if BAS_PROJECT_URL:
-
-        log(
-            f"Project URL  : {BAS_PROJECT_URL}"
-        )
 
     with sync_playwright() as p:
 
@@ -1050,64 +1093,191 @@ def main():
             # 9. 打开 Workspace 并触发 Shell
             # =================================================
 
-            open_workspace(
-                page,
-                context,
-                jwt,
-                workspace
-            )
+            def open_workspace(
+    page,
+    context,
+    jwt,
+    workspace
+):
+
+    runtime = workspace.get(
+        "runtime",
+        {}
+    )
+
+    workspace_url = (
+        runtime
+        .get("url", {})
+        .get("theia")
+    )
+
+    if not workspace_url:
+
+        workspace_url = (
+            BAS_URL
+            + "/"
+            + DEVSPACE_ID
+        )
+
+    log("==========================================")
+    log("打开 Dev Space Workspace")
+    log(f"Workspace URL：{workspace_url}")
+    log("==========================================")
+
+    # --------------------------------------------------------
+    # 1. 打开 Workspace
+    # --------------------------------------------------------
+
+    try:
+
+        page.goto(
+            workspace_url,
+            wait_until="domcontentloaded",
+            timeout=120000
+        )
+
+        log(
+            f"Workspace 页面已打开：{page.url}"
+        )
+
+    except Exception as e:
+
+        log(
+            f"Workspace 页面打开失败：{e}"
+        )
+
+        return False
+
+    # --------------------------------------------------------
+    # 2. 等待 VS Code / OpenVSCode Server 初始化
+    # --------------------------------------------------------
+
+    log(
+        "等待 VS Code Workspace 初始化..."
+    )
+
+    page.wait_for_timeout(
+        15000
+    )
+
+    # --------------------------------------------------------
+    # 3. 检查页面标题
+    # --------------------------------------------------------
+
+    try:
+
+        log(
+            f"Workspace 页面标题：{page.title()}"
+        )
+
+    except Exception:
+        pass
+
+    # --------------------------------------------------------
+    # 4. 尝试打开 Terminal
+    # --------------------------------------------------------
+
+    terminal_opened = False
+
+    terminal_selectors = [
+
+        # VS Code / OpenVSCode Server
+        'text=Terminal',
+
+        # 菜单
+        '[aria-label*="Terminal"]',
+
+        # Terminal 菜单项
+        '[role="menuitem"]:has-text("Terminal")',
+
+        # 新终端
+        'text=New Terminal',
+
+        # 命令面板
+        '[aria-label*="Command"]'
+    ]
+
+    for selector in terminal_selectors:
+
+        try:
+
+            locator = page.locator(
+                selector
+            ).first
+
+            if locator.is_visible(
+                timeout=2000
+            ):
+
+                log(
+                    f"发现 Terminal UI：{selector}"
+                )
+
+                locator.click()
+
+                terminal_opened = True
+
+                break
+
+        except Exception:
+            pass
+
+    # --------------------------------------------------------
+    # 5. 如果没有直接找到 Terminal，使用快捷键
+    # --------------------------------------------------------
+
+    if not terminal_opened:
+
+        try:
 
             log(
-                "=========================================="
+                "没有找到 Terminal 按钮，尝试快捷键..."
             )
 
-            log(
-                " Keep Alive 执行成功"
+            # VS Code 新建 Terminal：
+            # Ctrl + Shift + `
+            page.keyboard.press(
+                "Control+Shift+`"
             )
 
-            log(
-                f" Dev Space : {DEVSPACE_NAME}"
-            )
-
-            log(
-                " 状态      : RUNNING"
-            )
-
-            log(
-                " Workspace : 已访问且已触发节点联动"
-            )
-
-            log(
-                "=========================================="
-            )
+            terminal_opened = True
 
         except Exception as e:
 
             log(
-                "程序发生异常："
+                f"快捷键打开 Terminal 失败：{e}"
             )
 
-            log(
-                str(e)
-            )
+    # --------------------------------------------------------
+    # 6. 给 Bash / .bashrc 留出时间
+    # --------------------------------------------------------
 
-            try:
+    if terminal_opened:
 
-                page.screenshot(
-                    path="bas_error.png",
-                    full_page=True
-                )
+        log(
+            "Terminal 已触发，等待 Bash 初始化..."
+        )
 
-            except Exception:
-                pass
+        page.wait_for_timeout(
+            10000
+        )
 
-            sys.exit(1)
+    else:
 
-        finally:
+        log(
+            "警告：没有成功触发 Terminal。"
+        )
 
-            context.close()
-            browser.close()
+    # --------------------------------------------------------
+    # 7. 最终页面状态
+    # --------------------------------------------------------
 
+    log(
+        f"Workspace 当前页面：{page.url}"
+    )
 
-if __name__ == "__main__":
-    main()
+    log(
+        "Workspace 初始化流程完成。"
+    )
+
+    return terminal_opened
