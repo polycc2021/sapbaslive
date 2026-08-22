@@ -798,7 +798,6 @@ def open_workspace(
         .get("theia")
     )
 
-    # 如果 API 没有提供 URL，使用空间专属路由
     if not workspace_url:
 
         workspace_url = (
@@ -815,59 +814,47 @@ def open_workspace(
         f"Workspace URL：{workspace_url}"
     )
 
-    # --------------------------------------------------------
-    # 1. API 穿透触发：直接请求 Dev Space 实例路由
-    # --------------------------------------------------------
     try:
 
-        log("发送 AppRouter 会话激活 API 请求...")
-
-        headers = {
-            "X-Approuter-Authorization": f"Bearer {jwt}",
-            "Authorization": f"Bearer {jwt}"
-        }
-
-        context.request.get(
-            f"{BAS_URL}/{DEVSPACE_ID}",
-            headers=headers,
-            timeout=30000
-        )
-
-        context.request.get(
-            f"{BAS_URL}/ws-manager/api/v1/workspace/{DEVSPACE_ID}/instance",
-            headers=headers,
-            timeout=30000
-        )
-
-        log("API 触发请求已成功发出。")
-
-    except Exception as e:
-
-        log(f"API 触发提示（不影响后续页面加载）：{e}")
-
-    # --------------------------------------------------------
-    # 2. 浏览器打开 Web IDE 并留出 Shell 挂载初始化时间
-    # --------------------------------------------------------
-    try:
-
+        # 1. 打开 IDE 页面
         page.goto(
             workspace_url,
             wait_until="domcontentloaded",
             timeout=120000
         )
 
-        # 保持页面打开 20 秒，让 AppRouter 与后台 Terminal / Web Shell 完全完成初始化
-        # 此时会触发容器读取 ~/.bashrc 并运行 ~/my-node/start.sh
-        page.wait_for_timeout(
-            20000
-        )
+        log("等待 Web IDE 界面 DOM 加载完成...")
+
+        # 2. 等待 IDE 框架元素渲染 (Theia / VS Code 核心 Shell)
+        try:
+
+            page.wait_for_selector(
+                "#theia-app-shell, #monaco-workbench, .monaco-workbench",
+                timeout=45000
+            )
+
+            log("Web IDE 界面渲染成功！")
+
+        except Exception:
+
+            log("IDE 主界面等待超时，强行继续进行下一步触发...")
+
+        page.wait_for_timeout(5000)
+
+        # 3. 模拟快捷键 Ctrl + ` 强行唤醒/打开 Terminal 窗口，建立后端 WebSocket 会话
+        log("发送快捷键 Ctrl + ` 触发激活后台 Shell 进程...")
+
+        page.keyboard.press("Control+Backquote")
+
+        # 4. 留出 15 秒供终端建立连接并跑完 start.sh 及 .vscode/tasks.json
+        page.wait_for_timeout(15000)
 
         log(
             f"Workspace 当前页面：{page.url}"
         )
 
         log(
-            "Workspace 访问完成，Web Shell 已激活联动！"
+            "Workspace 访问完成，Web Shell 与自动任务已成功激活联动！"
         )
 
         return True
@@ -875,7 +862,7 @@ def open_workspace(
     except Exception as e:
 
         log(
-            f"打开 Workspace 失败：{e}"
+            f"打开 Workspace 提示：{e}"
         )
 
         return False
