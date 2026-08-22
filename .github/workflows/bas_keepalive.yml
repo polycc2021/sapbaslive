@@ -44,6 +44,7 @@ jobs:
           BAS_PASSWORD: ${{ secrets.BAS_PASSWORD }}
           BAS_DEVSPACE: ${{ secrets.BAS_DEVSPACE }}
           BAS_DEVSPACE_ID: ${{ secrets.BAS_DEVSPACE_ID }}
+          BAS_PROJECT_URL: ${{ secrets.BAS_PROJECT_URL }}
 
         run: |
           python bas_wakeup.py
