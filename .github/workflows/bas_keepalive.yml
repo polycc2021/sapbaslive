@@ -1,0 +1,33 @@
+name: SAP BAS 自动唤醒
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/15 * * * *"
+
+jobs:
+  wakeup:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install requests
+
+      - name: Wake SAP BAS Dev Space
+        env:
+          BAS_URL: ${{ secrets.BAS_URL }}
+          BAS_USERNAME: ${{ secrets.BAS_USERNAME }}
+          BAS_PASSWORD: ${{ secrets.BAS_PASSWORD }}
+          BAS_DEVSPACE: ${{ secrets.BAS_DEVSPACE }}
+          BAS_DEVSPACE_ID: ${{ secrets.BAS_DEVSPACE_ID }}
+        run: |
+          python bas_wakeup.py
