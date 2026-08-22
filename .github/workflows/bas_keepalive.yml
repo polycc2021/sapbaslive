@@ -1,33 +1,63 @@
-name: SAP BAS 自动唤醒
+name: SAP BAS Keep Alive
 
 on:
   workflow_dispatch:
+
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "*/10 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sap-bas-keepalive
+  cancel-in-progress: true
 
 jobs:
-  wakeup:
+
+  keep-alive:
+
     runs-on: ubuntu-latest
 
+    timeout-minutes: 10
+
     steps:
+
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |
-          pip install requests
+          python -m pip install --upgrade pip
+          pip install requests playwright
+          playwright install --with-deps chromium
 
-      - name: Wake SAP BAS Dev Space
+      - name: Start / Keep SAP BAS Dev Space
         env:
           BAS_URL: ${{ secrets.BAS_URL }}
           BAS_USERNAME: ${{ secrets.BAS_USERNAME }}
           BAS_PASSWORD: ${{ secrets.BAS_PASSWORD }}
           BAS_DEVSPACE: ${{ secrets.BAS_DEVSPACE }}
           BAS_DEVSPACE_ID: ${{ secrets.BAS_DEVSPACE_ID }}
+
         run: |
           python bas_wakeup.py
+
+      - name: Upload screenshots if failed
+        if: failure()
+
+        uses: actions/upload-artifact@v4
+
+        with:
+          name: bas-debug-screenshots
+
+          path: |
+            bas_error.png
+            sap_login_failed.png
+
+          if-no-files-found: ignore
