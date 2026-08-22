@@ -20,12 +20,12 @@ BAS_PASSWORD = os.getenv("BAS_PASSWORD")
 
 DEVSPACE_NAME = os.getenv(
     "BAS_DEVSPACE",
-    "yesdo"
+    "chixu"
 )
 
 DEVSPACE_ID = os.getenv(
     "BAS_DEVSPACE_ID",
-    "ws-a2zlg"
+    "ws-20y5a"
 )
 
 
@@ -777,11 +777,13 @@ def wait_until_running(
 
 
 # ============================================================
-# 打开 Workspace
+# 打开 Workspace 并触发 Web Shell / 启动脚本
 # ============================================================
 
 def open_workspace(
     page,
+    context,
+    jwt,
     workspace
 ):
 
@@ -796,22 +798,56 @@ def open_workspace(
         .get("theia")
     )
 
-    # 如果 API 没有提供 URL，则使用 BAS 主页
+    # 如果 API 没有提供 URL，使用空间专属路由
     if not workspace_url:
 
         workspace_url = (
             BAS_URL
-            + "/index.html"
+            + "/"
+            + DEVSPACE_ID
         )
 
     log(
-        "打开 Dev Space Workspace..."
+        "打开 Dev Space Workspace 并激活 Web Shell..."
     )
 
     log(
         f"Workspace URL：{workspace_url}"
     )
 
+    # --------------------------------------------------------
+    # 1. API 穿透触发：直接请求 Dev Space 实例路由
+    # --------------------------------------------------------
+    try:
+
+        log("发送 AppRouter 会话激活 API 请求...")
+
+        headers = {
+            "X-Approuter-Authorization": f"Bearer {jwt}",
+            "Authorization": f"Bearer {jwt}"
+        }
+
+        context.request.get(
+            f"{BAS_URL}/{DEVSPACE_ID}",
+            headers=headers,
+            timeout=30000
+        )
+
+        context.request.get(
+            f"{BAS_URL}/ws-manager/api/v1/workspace/{DEVSPACE_ID}/instance",
+            headers=headers,
+            timeout=30000
+        )
+
+        log("API 触发请求已成功发出。")
+
+    except Exception as e:
+
+        log(f"API 触发提示（不影响后续页面加载）：{e}")
+
+    # --------------------------------------------------------
+    # 2. 浏览器打开 Web IDE 并留出 Shell 挂载初始化时间
+    # --------------------------------------------------------
     try:
 
         page.goto(
@@ -820,8 +856,10 @@ def open_workspace(
             timeout=120000
         )
 
+        # 保持页面打开 20 秒，让 AppRouter 与后台 Terminal / Web Shell 完全完成初始化
+        # 此时会触发容器读取 ~/.bashrc 并运行 ~/my-node/start.sh
         page.wait_for_timeout(
-            15000
+            20000
         )
 
         log(
@@ -829,7 +867,7 @@ def open_workspace(
         )
 
         log(
-            "Workspace 已访问。"
+            "Workspace 访问完成，Web Shell 已激活联动！"
         )
 
         return True
@@ -1052,11 +1090,13 @@ def main():
                 sys.exit(1)
 
             # =================================================
-            # 9. 打开 Workspace
+            # 9. 打开 Workspace 并触发 Shell
             # =================================================
 
             open_workspace(
                 page,
+                context,
+                jwt,
                 workspace
             )
 
@@ -1077,7 +1117,7 @@ def main():
             )
 
             log(
-                " Workspace : 已访问"
+                " Workspace : 已访问且已触发节点联动"
             )
 
             log(
