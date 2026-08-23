@@ -55,6 +55,7 @@ jobs:
         with:
           name: bas-screenshots
           path: |
+            bas_manager.png
             bas_ide_after_open.png
             bas_ide_final.png
             bas_error.png
