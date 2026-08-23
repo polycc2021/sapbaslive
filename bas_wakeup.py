@@ -758,6 +758,98 @@ def wait_until_running(
     return None
 
 
+
+# ============================================================
+# 自动关闭常见弹窗（隐私 / 跟踪 / 欢迎）
+# ============================================================
+
+def dismiss_dialogs(page, context_name="page"):
+    """
+    关闭 BAS 常见弹窗：
+    1. Manager 页面的 "Explore the SAP Business Application Studio" 隐私弹窗
+    2. IDE 里的 tracking / privacy 弹窗
+    """
+    log(f"尝试关闭 {context_name} 上的弹窗...")
+
+    # 先勾选 "Do not show this message again"（如果有）
+    try:
+        checkbox_selectors = [
+            'input[type="checkbox"]',
+            'label:has-text("Do not show")',
+            'text=Do not show this message again',
+        ]
+        for sel in checkbox_selectors:
+            try:
+                loc = page.locator(sel).first
+                if loc.is_visible(timeout=1500):
+                    # 如果是 label，点它；如果是 checkbox，勾选
+                    if "checkbox" in sel:
+                        if not loc.is_checked():
+                            loc.check(force=True)
+                    else:
+                        loc.click(force=True)
+                    log("已勾选 Do not show this message again")
+                    page.wait_for_timeout(500)
+                    break
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    # 点击 OK / 关闭按钮
+    ok_selectors = [
+        'button:has-text("OK")',
+        'button:has-text("Ok")',
+        'button:has-text("确定")',
+        'button.sapMBtn:has-text("OK")',
+        '[role="button"]:has-text("OK")',
+        'button:has-text("Close")',
+        'button[title="Close"]',
+        '.sapMDialog button:has-text("OK")',
+    ]
+
+    clicked = False
+    for sel in ok_selectors:
+        try:
+            loc = page.locator(sel).first
+            if loc.is_visible(timeout=1500):
+                loc.click(force=True)
+                log(f"已点击弹窗按钮：{sel}")
+                page.wait_for_timeout(1500)
+                clicked = True
+                break
+        except Exception:
+            continue
+
+    # 有时弹窗在 iframe 里
+    if not clicked:
+        try:
+            for frame in page.frames:
+                for sel in ok_selectors:
+                    try:
+                        loc = frame.locator(sel).first
+                        if loc.is_visible(timeout=800):
+                            loc.click(force=True)
+                            log(f"在 iframe 中点击弹窗按钮：{sel}")
+                            page.wait_for_timeout(1500)
+                            clicked = True
+                            break
+                    except Exception:
+                        continue
+                if clicked:
+                    break
+        except Exception:
+            pass
+
+    if not clicked:
+        log(f"{context_name} 未发现需要关闭的弹窗（或已关闭）")
+    else:
+        # 再等一下让页面稳定
+        page.wait_for_timeout(2000)
+
+    return clicked
+
+
 # ============================================================
 # 在 Dev Space Manager 页面强力点击空间名字
 # ============================================================
@@ -780,6 +872,9 @@ def click_devspace_in_manager(page):
     except Exception as e:
         log(f"打开 Manager 页面失败：{e}")
         return False
+
+    # 先关闭隐私/欢迎弹窗，否则点不到空间名字
+    dismiss_dialogs(page, "Manager")
 
     # 打印当前页面信息，方便调试
     try:
@@ -926,6 +1021,9 @@ def open_terminal_and_activate(page):
     log("尝试在 IDE 中打开 Terminal 以激活节点...")
 
     wait_for_ide_ready(page, max_wait_seconds=90)
+
+    # 再关一次弹窗，避免挡住 Terminal
+    dismiss_dialogs(page, "IDE-before-terminal")
 
     page.wait_for_timeout(4000)
 
@@ -1075,6 +1173,9 @@ def open_workspace(
             log(f"reload 后文本长度：{len(body_text)}，预览：{body_text[:200]!r}")
         except Exception as e:
             log(f"reload 失败：{e}")
+
+    # 关闭 IDE 里的 tracking / privacy 弹窗
+    dismiss_dialogs(page, "IDE")
 
     # 截图
     try:
