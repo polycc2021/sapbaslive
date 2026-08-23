@@ -783,7 +783,6 @@ def wait_until_running(
 def click_devspace_in_manager(page):
     """
     回到 index.html / Dev Space Manager，模拟手动点击空间名字。
-    这是激活节点最可靠的方式之一。
     """
 
     log("回到 Dev Space Manager 页面，准备点击空间名字...")
@@ -794,12 +793,11 @@ def click_devspace_in_manager(page):
             wait_until="domcontentloaded",
             timeout=120000
         )
-        page.wait_for_timeout(8000)
+        page.wait_for_timeout(10000)
     except Exception as e:
         log(f"打开 Manager 页面失败：{e}")
         return False
 
-    # 多种可能的选择器（BAS UI 会变，尽量覆盖）
     name_selectors = [
         f'text="{DEVSPACE_NAME}"',
         f'a:has-text("{DEVSPACE_NAME}")',
@@ -816,15 +814,14 @@ def click_devspace_in_manager(page):
                 log(f"找到空间名字元素，使用选择器：{selector}")
                 loc.click(timeout=5000)
                 log("已点击空间名字，等待 IDE 加载...")
-                page.wait_for_timeout(15000)
+                page.wait_for_timeout(20000)
                 return True
         except Exception:
             continue
 
-    # 如果 iframe 里（老版 UI 常见）
+    # iframe 兜底
     try:
-        frames = page.frames
-        for frame in frames:
+        for frame in page.frames:
             for selector in name_selectors:
                 try:
                     loc = frame.locator(selector).first
@@ -832,7 +829,7 @@ def click_devspace_in_manager(page):
                         log(f"在 iframe 中找到空间名字：{selector}")
                         loc.click(timeout=5000)
                         log("已点击空间名字（iframe），等待 IDE 加载...")
-                        page.wait_for_timeout(15000)
+                        page.wait_for_timeout(20000)
                         return True
                 except Exception:
                     continue
@@ -844,59 +841,120 @@ def click_devspace_in_manager(page):
 
 
 # ============================================================
+# 等待 IDE 真正加载完成（关键！）
+# ============================================================
+
+def wait_for_ide_ready(page, max_wait_seconds=120):
+    """
+    真正等待 Theia / BAS IDE 界面出现。
+    trial 环境启动较慢，必须给足时间。
+    """
+
+    log(f"开始等待 IDE 真正就绪（最长 {max_wait_seconds} 秒）...")
+
+    ide_selectors = [
+        ".theia-app-shell",
+        "#theia-app-shell",
+        ".monaco-workbench",
+        ".theia-MainToolbar",
+        ".theia-sidepanel-toolbar",
+        ".p-Widget.theia-app-shell",
+        "[id*='theia']",
+        ".lm-Widget",                 # Lumino (Theia 底层)
+        ".monaco-editor",
+        ".codicon",                   # VS Code 图标
+        "div[class*='theia']",
+        "div[class*='monaco']",
+        "div[class*='workbench']",
+    ]
+
+    start = time.time()
+    attempt = 0
+
+    while time.time() - start < max_wait_seconds:
+        attempt += 1
+        elapsed = int(time.time() - start)
+
+        # 1. 检查选择器
+        for sel in ide_selectors:
+            try:
+                loc = page.locator(sel).first
+                if loc.count() > 0 and loc.is_visible(timeout=500):
+                    log(f"IDE 已就绪！检测到元素：{sel}（耗时 {elapsed}s）")
+                    return True
+            except Exception:
+                pass
+
+        # 2. 检查页面标题 / URL
+        try:
+            title = page.title().lower()
+            url = page.url.lower()
+            if any(k in title for k in ["business application studio", "theia", "code", "bas"]):
+                log(f"通过标题判断 IDE 可能已加载：{page.title()}（耗时 {elapsed}s）")
+                # 再多等一会让 UI 完全渲染
+                page.wait_for_timeout(8000)
+                return True
+            if "theia-workspaces" in url and "index.html" not in url:
+                # 已经在 workspace 域名下，即使选择器还没出来也继续等
+                pass
+        except Exception:
+            pass
+
+        # 3. 检查 body 文本长度（加载中页面通常内容很少）
+        try:
+            body_text = page.locator("body").inner_text(timeout=2000)
+            if len(body_text) > 200:
+                log(f"页面已有较多内容（{len(body_text)} 字符），认为已加载（耗时 {elapsed}s）")
+                page.wait_for_timeout(5000)
+                return True
+        except Exception:
+            pass
+
+        if attempt % 5 == 0:
+            log(f"仍在等待 IDE... 已等待 {elapsed}s，当前 URL：{page.url}")
+
+        page.wait_for_timeout(3000)
+
+    log(f"等待 IDE 超时（{max_wait_seconds}s），继续尝试打开 Terminal。")
+    return False
+
+
+# ============================================================
 # 打开 Terminal，真正触发 shell / bashrc / start.sh
 # ============================================================
 
 def open_terminal_and_activate(page):
     """
     在已打开的 Theia / BAS IDE 中打开集成终端。
-    打开终端会完整挂载用户 shell，从而执行 ~/.bashrc 和 start.sh。
     """
 
     log("尝试在 IDE 中打开 Terminal 以激活节点...")
 
-    # 等待 IDE 主界面出现（常见 Theia / VS Code 类选择器）
-    ide_ready_selectors = [
-        ".theia-app-shell",
-        "#theia-app-shell",
-        ".monaco-workbench",
-        ".theia-MainToolbar",
-        "[class*='theia']",
-        "body",
-    ]
-
-    ready = False
-    for sel in ide_ready_selectors:
-        try:
-            page.wait_for_selector(sel, timeout=20000)
-            ready = True
-            log(f"IDE 已就绪（检测到 {sel}）")
-            break
-        except Exception:
-            continue
-
-    if not ready:
-        log("未检测到典型 IDE 元素，但仍尝试打开 Terminal。")
+    # 先尽量等 IDE 就绪
+    wait_for_ide_ready(page, max_wait_seconds=90)
 
     page.wait_for_timeout(5000)
 
-    # 方法 1：键盘快捷键 Ctrl+` （最通用）
+    # 方法 1：键盘快捷键 Ctrl+`
     try:
         log("使用快捷键 Ctrl+` 打开 Terminal...")
         page.keyboard.press("Control+`")
-        page.wait_for_timeout(5000)
+        page.wait_for_timeout(4000)
+        page.keyboard.press("Control+Shift+`")  # 有时是这个
+        page.wait_for_timeout(3000)
         log("快捷键已发送。")
     except Exception as e:
         log(f"快捷键失败：{e}")
 
-    # 方法 2：Command Palette → Terminal: Create New Terminal
+    # 方法 2：Command Palette
     try:
         log("尝试 Command Palette 打开 Terminal...")
         page.keyboard.press("Control+Shift+P")
-        page.wait_for_timeout(2000)
+        page.wait_for_timeout(2500)
 
-        # 输入命令
-        page.keyboard.type("Terminal: Create New Terminal", delay=50)
+        # 清空并输入
+        page.keyboard.press("Control+A")
+        page.keyboard.type("Terminal: Create New Terminal", delay=30)
         page.wait_for_timeout(1500)
         page.keyboard.press("Enter")
         page.wait_for_timeout(5000)
@@ -904,32 +962,22 @@ def open_terminal_and_activate(page):
     except Exception as e:
         log(f"Command Palette 方式提示：{e}")
 
-    # 方法 3：菜单点击（如果可见）
-    menu_selectors = [
-        'text=Terminal',
-        'li:has-text("Terminal")',
-        '[aria-label*="Terminal"]',
-        'a:has-text("Terminal")',
-    ]
-    for sel in menu_selectors:
-        try:
-            menu = page.locator(sel).first
-            if menu.is_visible(timeout=2000):
-                menu.click()
-                page.wait_for_timeout(1000)
-                # 再点 New Terminal
-                new_term = page.locator('text=New Terminal').first
-                if new_term.is_visible(timeout=2000):
-                    new_term.click()
-                    log("通过菜单打开了 New Terminal。")
-                    page.wait_for_timeout(5000)
-                    break
-        except Exception:
-            continue
+    # 方法 3：再试一次快捷键 + View 菜单常见操作
+    try:
+        page.keyboard.press("Control+`")
+        page.wait_for_timeout(2000)
+        page.keyboard.press("F1")
+        page.wait_for_timeout(1500)
+        page.keyboard.type("terminal", delay=40)
+        page.wait_for_timeout(1000)
+        page.keyboard.press("Enter")
+        page.wait_for_timeout(3000)
+    except Exception:
+        pass
 
     # 给 shell 足够时间执行 ~/.bashrc 和 start.sh
-    log("等待 shell 初始化并执行 start.sh（约 25 秒）...")
-    page.wait_for_timeout(25000)
+    log("等待 shell 初始化并执行 start.sh（约 35 秒）...")
+    page.wait_for_timeout(35000)
 
     log("Terminal 激活流程完成。")
     return True
@@ -957,9 +1005,7 @@ def open_workspace(
         .get("theia")
     )
 
-    # 如果 API 没有提供 URL，使用空间专属路由
     if not workspace_url:
-
         workspace_url = (
             BAS_URL
             + "/"
@@ -980,7 +1026,6 @@ def open_workspace(
     # 1. API 穿透触发（辅助）
     # --------------------------------------------------------
     try:
-
         log("发送 AppRouter 会话激活 API 请求...")
 
         headers = {
@@ -1000,7 +1045,6 @@ def open_workspace(
             timeout=30000
         )
 
-        # 再请求一次 theia 相关路径
         if workspace_url:
             context.request.get(
                 workspace_url,
@@ -1011,7 +1055,6 @@ def open_workspace(
         log("API 触发请求已成功发出。")
 
     except Exception as e:
-
         log(f"API 触发提示（不影响后续页面加载）：{e}")
 
     # --------------------------------------------------------
@@ -1028,29 +1071,52 @@ def open_workspace(
             page.goto(
                 workspace_url,
                 wait_until="domcontentloaded",
-                timeout=120000
+                timeout=180000
             )
-            page.wait_for_timeout(15000)
         except Exception as e:
             log(f"直接打开 Workspace 失败：{e}")
-            return False
+            # 即使 goto 报错也继续，后面再尝试
+            pass
 
-    # 确认当前是否已经进入 IDE
+    # 关键：给 Theia 足够时间启动（trial 经常需要 40~80 秒）
+    log("页面已跳转，开始长时间等待 IDE 加载（最多 100 秒）...")
+    page.wait_for_timeout(15000)
+
+    try:
+        page.wait_for_load_state("networkidle", timeout=60000)
+        log("networkidle 已到达。")
+    except Exception:
+        log("networkidle 超时，继续使用固定等待。")
+
+    # 再强制等一段时间
+    page.wait_for_timeout(20000)
+
     current = page.url
     log(f"当前页面 URL：{current}")
 
     # 如果还在 manager，再强制跳一次
-    if "index.html" in current or "ws-manager" in current or DEVSPACE_NAME in current and "theia" not in current.lower():
+    if "index.html" in current or ("ws-manager" in current and "theia-workspaces" not in current):
         log("仍可能在 Manager 页面，强制跳转到 workspace_url...")
         try:
             page.goto(
                 workspace_url,
                 wait_until="domcontentloaded",
-                timeout=120000
+                timeout=180000
             )
-            page.wait_for_timeout(12000)
+            page.wait_for_timeout(25000)
+            try:
+                page.wait_for_load_state("networkidle", timeout=45000)
+            except Exception:
+                pass
         except Exception as e:
             log(f"强制跳转提示：{e}")
+
+    # 截图方便调试（GitHub Actions 可下载 artifact）
+    try:
+        page.screenshot(path="bas_ide_after_open.png", full_page=True)
+        log("已保存截图：bas_ide_after_open.png")
+    except Exception:
+        pass
 
     # --------------------------------------------------------
     # 4. 打开 Terminal，真正激活 shell 与 start.sh
@@ -1058,10 +1124,17 @@ def open_workspace(
     open_terminal_and_activate(page)
 
     # --------------------------------------------------------
-    # 5. 额外保持一段时间，确保后台进程稳定
+    # 5. 额外保持页面打开更长时间，确保节点完全激活
     # --------------------------------------------------------
-    log("额外保持页面打开 20 秒，确保节点完全激活...")
-    page.wait_for_timeout(20000)
+    log("额外保持页面打开 40 秒，确保节点完全激活...")
+    page.wait_for_timeout(40000)
+
+    # 最后再截一次图
+    try:
+        page.screenshot(path="bas_ide_final.png", full_page=True)
+        log("已保存最终截图：bas_ide_final.png")
+    except Exception:
+        pass
 
     log(
         f"Workspace 最终页面：{page.url}"
