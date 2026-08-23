@@ -19,7 +19,7 @@ jobs:
 
     runs-on: ubuntu-latest
 
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
 
@@ -49,16 +49,14 @@ jobs:
         run: |
           python bas_wakeup.py
 
-      - name: Upload screenshots if failed
-        if: failure()
-
+      - name: Upload BAS screenshots
+        if: always()
         uses: actions/upload-artifact@v4
-
         with:
-          name: bas-debug-screenshots
-
+          name: bas-screenshots
           path: |
+            bas_ide_after_open.png
+            bas_ide_final.png
             bas_error.png
             sap_login_failed.png
-
           if-no-files-found: ignore
