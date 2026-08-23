@@ -779,7 +779,7 @@ def wait_until_running(
     return None
 
 # ============================================================
-# 模拟手动点击 Dev Space 名称 (nedo) 并唤醒开发环境
+# 模拟人为点击 BAS_DEVSPACE 对应的空间名称并唤醒开发环境
 # ============================================================
 
 def open_workspace(
@@ -788,73 +788,83 @@ def open_workspace(
     jwt,
     workspace
 ):
+    # 1. 动态确定目标空间名称：优先提取 API 返回的名称，兜底使用环境变量 BAS_DEVSPACE
+    target_name = DEVSPACE_NAME
+    if workspace and isinstance(workspace, dict):
+        config = workspace.get("config", {})
+        labels = config.get("labels", {})
+        display_name = labels.get("ws-manager.devx.sap.com/displayname")
+        if display_name:
+            target_name = display_name
+
     log("==========================================")
-    log(f"开始模拟手动点击 Dev Space 名称：[{DEVSPACE_NAME}]...")
+    log(f"准备模拟人为点击空间名称：[{target_name}]...")
 
     try:
-        # 1. 打开 BAS 控制台主页
+        # 2. 打开 BAS 控制台主页
         index_url = BAS_URL + "/index.html"
         log(f"打开 BAS 主页：{index_url}")
         page.goto(index_url, wait_until="domcontentloaded", timeout=60000)
         
-        # 留出 8 秒等待 SAP UI5 动态卡片列表渲染完成
+        # 留出 8 秒供 SAP UI5 渲染主页卡片列表
         page.wait_for_timeout(8000)
 
-        log(f"正在主页寻找 [{DEVSPACE_NAME}] 卡片并执行点击...")
+        log(f"正在主页查找名称为 [{target_name}] 的空间卡片...")
 
         target_page = None
 
-        # 2. 监听点击空间后弹出的新标签页，并用 JS 穿透 Shadow DOM 进行精准点击
+        # 3. 监听点击后打开的“新标签页”，并使用 JS 穿透 Shadow DOM 进行精准点击
         try:
             with context.expect_page(timeout=15000) as new_page_info:
+                # 注入 JS 深度搜索 Shadow DOM，匹配目标 space name 并触发真实 click
                 clicked = page.evaluate(
-                    f'''() => {{
-                        function findAndClick(root) {{
+                    '''(name) => {
+                        function findAndClick(root) {
                             const nodes = root.querySelectorAll('*');
-                            for (let node of nodes) {{
-                                if (node.shadowRoot) {{
+                            for (let node of nodes) {
+                                if (node.shadowRoot) {
                                     if (findAndClick(node.shadowRoot)) return true;
-                                }}
-                                // 匹配你的空间名称 nedo
-                                if (node.textContent && node.textContent.trim() === "{DEVSPACE_NAME}") {{
-                                    // 找到后寻找最外层的可点击容器或直接点击节点
-                                    const target = node.closest('a, button, ui5-card, ui5-link, [role="button"]') || node;
-                                    target.click();
+                                }
+                                // 精准匹配空间的 Display Name
+                                if (node.textContent && node.textContent.trim() === name) {
+                                    const clickTarget = node.closest('a, button, ui5-card, ui5-link, [role="button"]') || node;
+                                    clickTarget.click();
                                     return true;
-                                }}
-                            }}
+                                }
+                            }
                             return false;
-                        }}
+                        }
                         return findAndClick(document.body);
-                    }}'''
+                    }''',
+                    target_name
                 )
 
                 if clicked:
-                    log("成功通过 Shadow DOM 点击空间名称！")
+                    log(f"成功通过 Shadow DOM 精准点击空间名称 [{target_name}]！")
                 else:
-                    log("未找到空间名称节点，尝试常规 Selector 点击...")
-                    page.locator(f'text="{DEVSPACE_NAME}"').first.click()
+                    log("Shadow DOM 穿透未命中，尝试常规 Selector 点击...")
+                    page.locator(f'text="{target_name}"').first.click()
 
-            # 捕获弹出的 IDE 新页面
+            # 成功抓取到点击后弹出的 IDE 开发环境新 Tab
             target_page = new_page_info.value
             log("成功捕获弹出的开发环境新标签页！")
 
-        except Exception:
-            log("未检测到新窗口，将在当前页面继续等待加载...")
+        except Exception as e:
+            log(f"未捕获到新窗口，将在原页面等待（提示: {e}）...")
             target_page = page
 
-        # 3. 等待开发环境（IDE）核心挂载及初始化
-        log("正在等待开发环境完成加载并运行启动节点命令...")
+        # 4. 等待 IDE 挂载完成并初始化环境（触发节点自动启动命令）
+        log("正在等待开发环境完成初始化并跑完节点启动命令...")
         
-        # 关键步骤：留出 35 秒，确保 IDE 渲染完成并触发你的自动运行节点脚本
+        # 预留 35 秒，确保 IDE 前后端建立链接并触发脚本
         target_page.wait_for_timeout(35000)
 
-        log(f"开发环境唤醒完成！当前页面地址：{target_page.url}")
+        log(f"开发环境唤醒完成！当前 IDE 链接：{target_page.url}")
         log("==========================================")
         return True
 
     except Exception as e:
-        log(f"打开开发环境过程失败：{e}")
+        log(f"模拟点击打开开发环境过程失败：{e}")
         return False
 
 # ============================================================
