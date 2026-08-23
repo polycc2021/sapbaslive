@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
   schedule:
-    - cron: "*/60 * * * *"
+    - cron: "*/40 * * * *"
 
 permissions:
   contents: read
@@ -48,16 +48,3 @@ jobs:
 
         run: |
           python bas_wakeup.py
-
-      - name: Upload BAS screenshots
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: bas-screenshots
-          path: |
-            bas_manager.png
-            bas_ide_after_open.png
-            bas_ide_final.png
-            bas_error.png
-            sap_login_failed.png
-          if-no-files-found: ignore
