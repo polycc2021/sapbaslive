@@ -432,10 +432,6 @@ def get_workspace(context, jwt):
         f"API 返回 Workspace 数量：{len(data)}"
     )
 
-    # ========================================================
-    # 查找目标 Dev Space
-    # ========================================================
-
     for workspace in data:
 
         if not isinstance(
@@ -482,10 +478,6 @@ def get_workspace(context, jwt):
             f"Username     : {username}"
         )
 
-        # ----------------------------------------------------
-        # ID 匹配
-        # ----------------------------------------------------
-
         if (
             str(workspace_id)
             == str(DEVSPACE_ID)
@@ -496,10 +488,6 @@ def get_workspace(context, jwt):
             )
 
             return workspace
-
-        # ----------------------------------------------------
-        # 名称匹配
-        # ----------------------------------------------------
 
         if (
             display_name
@@ -551,7 +539,6 @@ def get_status(workspace):
 
         return status
 
-    # 如果 runtime.status 没有，再看 suspended
     config = workspace.get(
         "config",
         {}
@@ -620,12 +607,7 @@ def start_workspace(
 
     if not display_name:
 
-        # 如果 API 没有返回名称，则使用 Secret
         display_name = DEVSPACE_NAME
-
-    # ========================================================
-    # SAP 官方 API
-    # ========================================================
 
     url = (
         BAS_URL
@@ -777,12 +759,13 @@ def wait_until_running(
 
 
 # ============================================================
-# 在 Dev Space Manager 页面点击空间名字（最接近手动操作）
+# 在 Dev Space Manager 页面强力点击空间名字
 # ============================================================
 
 def click_devspace_in_manager(page):
     """
-    回到 index.html / Dev Space Manager，模拟手动点击空间名字。
+    回到 index.html，用多种方式找到并点击空间名字/卡片。
+    这是建立正确会话最可靠的方式。
     """
 
     log("回到 Dev Space Manager 页面，准备点击空间名字...")
@@ -793,62 +776,84 @@ def click_devspace_in_manager(page):
             wait_until="domcontentloaded",
             timeout=120000
         )
-        page.wait_for_timeout(10000)
+        page.wait_for_timeout(12000)
     except Exception as e:
         log(f"打开 Manager 页面失败：{e}")
         return False
 
-    name_selectors = [
-        f'text="{DEVSPACE_NAME}"',
-        f'a:has-text("{DEVSPACE_NAME}")',
-        f'span:has-text("{DEVSPACE_NAME}")',
-        f'div:has-text("{DEVSPACE_NAME}")',
-        f'[title="{DEVSPACE_NAME}"]',
-        f'*:has-text("{DEVSPACE_NAME}")',
+    # 打印当前页面信息，方便调试
+    try:
+        log(f"Manager 页面标题：{page.title()}")
+        log(f"Manager 页面 URL：{page.url}")
+        body_preview = page.locator("body").inner_text(timeout=3000)[:300]
+        log(f"Manager 页面内容预览：{body_preview!r}")
+    except Exception as e:
+        log(f"获取 Manager 页面信息失败：{e}")
+
+    # 截图 Manager 页面
+    try:
+        page.screenshot(path="bas_manager.png", full_page=True)
+        log("已保存 Manager 截图：bas_manager.png")
+    except Exception:
+        pass
+
+    # 更全面的选择器
+    candidates = [
+        # 精确名字
+        page.get_by_text(DEVSPACE_NAME, exact=True),
+        page.locator(f'text="{DEVSPACE_NAME}"'),
+        page.locator(f'a:has-text("{DEVSPACE_NAME}")'),
+        page.locator(f'span:has-text("{DEVSPACE_NAME}")'),
+        page.locator(f'div:has-text("{DEVSPACE_NAME}")'),
+        page.locator(f'[title="{DEVSPACE_NAME}"]'),
+        page.locator(f'[aria-label*="{DEVSPACE_NAME}"]'),
+        # 带 ID
+        page.locator(f'text="{DEVSPACE_ID}"'),
+        page.locator(f'*:has-text("{DEVSPACE_ID}")'),
+        # 模糊
+        page.get_by_text(DEVSPACE_NAME, exact=False),
     ]
 
-    for selector in name_selectors:
+    for i, loc in enumerate(candidates):
         try:
-            loc = page.locator(selector).first
-            if loc.is_visible(timeout=3000):
-                log(f"找到空间名字元素，使用选择器：{selector}")
-                loc.click(timeout=5000)
-                log("已点击空间名字，等待 IDE 加载...")
-                page.wait_for_timeout(20000)
-                return True
-        except Exception:
+            if loc.count() > 0:
+                first = loc.first
+                if first.is_visible(timeout=2000):
+                    log(f"找到可点击元素（候选 {i}），准备点击...")
+                    first.scroll_into_view_if_needed()
+                    page.wait_for_timeout(1000)
+                    first.click(timeout=8000, force=True)
+                    log("已点击空间名字/卡片，等待跳转...")
+                    page.wait_for_timeout(25000)
+                    return True
+        except Exception as e:
+            log(f"候选 {i} 点击失败：{e}")
             continue
 
     # iframe 兜底
     try:
         for frame in page.frames:
-            for selector in name_selectors:
-                try:
-                    loc = frame.locator(selector).first
-                    if loc.is_visible(timeout=2000):
-                        log(f"在 iframe 中找到空间名字：{selector}")
-                        loc.click(timeout=5000)
-                        log("已点击空间名字（iframe），等待 IDE 加载...")
-                        page.wait_for_timeout(20000)
-                        return True
-                except Exception:
-                    continue
+            try:
+                loc = frame.get_by_text(DEVSPACE_NAME, exact=False)
+                if loc.count() > 0 and loc.first.is_visible(timeout=2000):
+                    log("在 iframe 中找到空间名字，点击...")
+                    loc.first.click(timeout=5000, force=True)
+                    page.wait_for_timeout(25000)
+                    return True
+            except Exception:
+                continue
     except Exception as e:
         log(f"iframe 查找提示：{e}")
 
-    log("未能在 Manager 页面点击到空间名字，将改用直接打开 workspace URL。")
+    log("未能在 Manager 页面点击到空间名字。")
     return False
 
 
 # ============================================================
-# 等待 IDE 真正加载完成（关键！）
+# 等待 IDE 真正加载完成
 # ============================================================
 
 def wait_for_ide_ready(page, max_wait_seconds=120):
-    """
-    真正等待 Theia / BAS IDE 界面出现。
-    trial 环境启动较慢，必须给足时间。
-    """
 
     log(f"开始等待 IDE 真正就绪（最长 {max_wait_seconds} 秒）...")
 
@@ -857,15 +862,13 @@ def wait_for_ide_ready(page, max_wait_seconds=120):
         "#theia-app-shell",
         ".monaco-workbench",
         ".theia-MainToolbar",
-        ".theia-sidepanel-toolbar",
         ".p-Widget.theia-app-shell",
-        "[id*='theia']",
-        ".lm-Widget",                 # Lumino (Theia 底层)
         ".monaco-editor",
-        ".codicon",                   # VS Code 图标
+        ".codicon",
         "div[class*='theia']",
         "div[class*='monaco']",
         "div[class*='workbench']",
+        ".lm-Widget",
     ]
 
     start = time.time()
@@ -875,116 +878,96 @@ def wait_for_ide_ready(page, max_wait_seconds=120):
         attempt += 1
         elapsed = int(time.time() - start)
 
-        # 1. 检查选择器
         for sel in ide_selectors:
             try:
                 loc = page.locator(sel).first
-                if loc.count() > 0 and loc.is_visible(timeout=500):
+                if loc.count() > 0 and loc.is_visible(timeout=400):
                     log(f"IDE 已就绪！检测到元素：{sel}（耗时 {elapsed}s）")
                     return True
             except Exception:
                 pass
 
-        # 2. 检查页面标题 / URL
         try:
-            title = page.title().lower()
-            url = page.url.lower()
-            if any(k in title for k in ["business application studio", "theia", "code", "bas"]):
-                log(f"通过标题判断 IDE 可能已加载：{page.title()}（耗时 {elapsed}s）")
-                # 再多等一会让 UI 完全渲染
+            title = page.title()
+            url = page.url
+            if title and any(k in title.lower() for k in ["business application studio", "theia", "code editor", "bas"]):
+                log(f"通过标题判断 IDE 可能已加载：{title}（耗时 {elapsed}s）")
                 page.wait_for_timeout(8000)
                 return True
-            if "theia-workspaces" in url and "index.html" not in url:
-                # 已经在 workspace 域名下，即使选择器还没出来也继续等
+            if "theia-workspaces" in url.lower() and "index.html" not in url:
                 pass
         except Exception:
             pass
 
-        # 3. 检查 body 文本长度（加载中页面通常内容很少）
         try:
-            body_text = page.locator("body").inner_text(timeout=2000)
-            if len(body_text) > 200:
-                log(f"页面已有较多内容（{len(body_text)} 字符），认为已加载（耗时 {elapsed}s）")
+            body_text = page.locator("body").inner_text(timeout=1500)
+            if body_text and len(body_text.strip()) > 80:
+                log(f"页面已有内容（{len(body_text)} 字符），认为已加载（耗时 {elapsed}s）")
                 page.wait_for_timeout(5000)
                 return True
         except Exception:
             pass
 
-        if attempt % 5 == 0:
-            log(f"仍在等待 IDE... 已等待 {elapsed}s，当前 URL：{page.url}")
+        if attempt % 4 == 0:
+            log(f"仍在等待 IDE... 已等待 {elapsed}s，URL：{page.url}")
 
         page.wait_for_timeout(3000)
 
-    log(f"等待 IDE 超时（{max_wait_seconds}s），继续尝试打开 Terminal。")
+    log(f"等待 IDE 超时（{max_wait_seconds}s）")
     return False
 
 
 # ============================================================
-# 打开 Terminal，真正触发 shell / bashrc / start.sh
+# 打开 Terminal
 # ============================================================
 
 def open_terminal_and_activate(page):
-    """
-    在已打开的 Theia / BAS IDE 中打开集成终端。
-    """
 
     log("尝试在 IDE 中打开 Terminal 以激活节点...")
 
-    # 先尽量等 IDE 就绪
     wait_for_ide_ready(page, max_wait_seconds=90)
 
-    page.wait_for_timeout(5000)
+    page.wait_for_timeout(4000)
 
-    # 方法 1：键盘快捷键 Ctrl+`
+    # 快捷键
     try:
         log("使用快捷键 Ctrl+` 打开 Terminal...")
         page.keyboard.press("Control+`")
-        page.wait_for_timeout(4000)
-        page.keyboard.press("Control+Shift+`")  # 有时是这个
         page.wait_for_timeout(3000)
-        log("快捷键已发送。")
+        page.keyboard.press("Control+Shift+`")
+        page.wait_for_timeout(3000)
     except Exception as e:
         log(f"快捷键失败：{e}")
 
-    # 方法 2：Command Palette
+    # Command Palette
     try:
         log("尝试 Command Palette 打开 Terminal...")
         page.keyboard.press("Control+Shift+P")
-        page.wait_for_timeout(2500)
-
-        # 清空并输入
+        page.wait_for_timeout(2000)
         page.keyboard.press("Control+A")
-        page.keyboard.type("Terminal: Create New Terminal", delay=30)
-        page.wait_for_timeout(1500)
+        page.keyboard.type("Terminal: Create New Terminal", delay=25)
+        page.wait_for_timeout(1200)
         page.keyboard.press("Enter")
-        page.wait_for_timeout(5000)
-        log("Command Palette 命令已执行。")
+        page.wait_for_timeout(4000)
     except Exception as e:
-        log(f"Command Palette 方式提示：{e}")
+        log(f"Command Palette 提示：{e}")
 
-    # 方法 3：再试一次快捷键 + View 菜单常见操作
+    # 再试一次
     try:
         page.keyboard.press("Control+`")
         page.wait_for_timeout(2000)
-        page.keyboard.press("F1")
-        page.wait_for_timeout(1500)
-        page.keyboard.type("terminal", delay=40)
-        page.wait_for_timeout(1000)
-        page.keyboard.press("Enter")
-        page.wait_for_timeout(3000)
     except Exception:
         pass
 
-    # 给 shell 足够时间执行 ~/.bashrc 和 start.sh
-    log("等待 shell 初始化并执行 start.sh（约 35 秒）...")
-    page.wait_for_timeout(35000)
+    log("等待 shell 初始化并执行 start.sh（约 40 秒）...")
+    page.wait_for_timeout(40000)
 
     log("Terminal 激活流程完成。")
     return True
 
 
 # ============================================================
-# 打开 Workspace 并触发 Web Shell / 启动脚本（增强版）
+# 打开 Workspace（核心增强版）
 # ============================================================
 
 def open_workspace(
@@ -1012,138 +995,119 @@ def open_workspace(
             + DEVSPACE_ID
         )
 
-    log(
-        "=========================================="
-    )
-    log(
-        "打开 Dev Space Workspace 并激活节点..."
-    )
-    log(
-        f"Workspace URL：{workspace_url}"
-    )
+    log("==========================================")
+    log("打开 Dev Space Workspace 并激活节点...")
+    log(f"Workspace URL：{workspace_url}")
 
-    # --------------------------------------------------------
-    # 1. API 穿透触发（辅助）
-    # --------------------------------------------------------
+    # 1. API 辅助触发
     try:
         log("发送 AppRouter 会话激活 API 请求...")
-
         headers = {
             "X-Approuter-Authorization": f"Bearer {jwt}",
             "Authorization": f"Bearer {jwt}"
         }
-
-        context.request.get(
-            f"{BAS_URL}/{DEVSPACE_ID}",
-            headers=headers,
-            timeout=30000
-        )
-
+        context.request.get(f"{BAS_URL}/{DEVSPACE_ID}", headers=headers, timeout=30000)
         context.request.get(
             f"{BAS_URL}/ws-manager/api/v1/workspace/{DEVSPACE_ID}/instance",
             headers=headers,
             timeout=30000
         )
-
         if workspace_url:
-            context.request.get(
-                workspace_url,
-                headers=headers,
-                timeout=30000
-            )
-
+            context.request.get(workspace_url, headers=headers, timeout=30000)
         log("API 触发请求已成功发出。")
-
     except Exception as e:
-        log(f"API 触发提示（不影响后续页面加载）：{e}")
+        log(f"API 触发提示：{e}")
 
-    # --------------------------------------------------------
-    # 2. 优先模拟「手动点击空间名字」
-    # --------------------------------------------------------
+    # 2. 优先走「点击空间名字」链路（建立正确会话）
     clicked = click_devspace_in_manager(page)
 
-    # --------------------------------------------------------
-    # 3. 如果点击失败，直接 goto workspace_url
-    # --------------------------------------------------------
+    # 3. 如果点击失败，带 JWT 头直接打开
     if not clicked:
-        log("改用直接打开 Workspace URL...")
+        log("改用直接打开 Workspace URL（带 Authorization 头）...")
         try:
+            page.set_extra_http_headers({
+                "Authorization": f"Bearer {jwt}",
+                "X-Approuter-Authorization": f"Bearer {jwt}"
+            })
             page.goto(
                 workspace_url,
                 wait_until="domcontentloaded",
                 timeout=180000
             )
         except Exception as e:
-            log(f"直接打开 Workspace 失败：{e}")
-            # 即使 goto 报错也继续，后面再尝试
-            pass
+            log(f"直接打开失败：{e}")
 
-    # 关键：给 Theia 足够时间启动（trial 经常需要 40~80 秒）
-    log("页面已跳转，开始长时间等待 IDE 加载（最多 100 秒）...")
-    page.wait_for_timeout(15000)
+    # 4. 长时间等待 + 检测白屏
+    log("页面已跳转，开始长时间等待 IDE 加载...")
+    page.wait_for_timeout(20000)
 
     try:
         page.wait_for_load_state("networkidle", timeout=60000)
         log("networkidle 已到达。")
     except Exception:
-        log("networkidle 超时，继续使用固定等待。")
+        log("networkidle 超时，继续。")
 
-    # 再强制等一段时间
-    page.wait_for_timeout(20000)
+    page.wait_for_timeout(15000)
 
-    current = page.url
-    log(f"当前页面 URL：{current}")
+    # 打印当前状态
+    try:
+        log(f"当前 URL：{page.url}")
+        log(f"当前标题：{page.title()}")
+        body_text = page.locator("body").inner_text(timeout=3000)
+        log(f"页面文本长度：{len(body_text)}，预览：{body_text[:200]!r}")
+    except Exception as e:
+        log(f"获取页面信息失败：{e}")
+        body_text = ""
 
-    # 如果还在 manager，再强制跳一次
-    if "index.html" in current or ("ws-manager" in current and "theia-workspaces" not in current):
-        log("仍可能在 Manager 页面，强制跳转到 workspace_url...")
+    # 5. 如果是白屏，尝试 reload 一次
+    if not body_text or len(body_text.strip()) < 30:
+        log("检测到疑似白屏，尝试 reload...")
         try:
-            page.goto(
-                workspace_url,
-                wait_until="domcontentloaded",
-                timeout=180000
-            )
+            page.reload(wait_until="domcontentloaded", timeout=120000)
             page.wait_for_timeout(25000)
             try:
                 page.wait_for_load_state("networkidle", timeout=45000)
             except Exception:
                 pass
-        except Exception as e:
-            log(f"强制跳转提示：{e}")
+            page.wait_for_timeout(15000)
 
-    # 截图方便调试（GitHub Actions 可下载 artifact）
+            body_text = page.locator("body").inner_text(timeout=3000)
+            log(f"reload 后文本长度：{len(body_text)}，预览：{body_text[:200]!r}")
+        except Exception as e:
+            log(f"reload 失败：{e}")
+
+    # 截图
     try:
         page.screenshot(path="bas_ide_after_open.png", full_page=True)
         log("已保存截图：bas_ide_after_open.png")
     except Exception:
         pass
 
-    # --------------------------------------------------------
-    # 4. 打开 Terminal，真正激活 shell 与 start.sh
-    # --------------------------------------------------------
+    # 6. 如果还在 manager，再强制跳一次
+    current = page.url
+    if "index.html" in current or ("ws-manager" in current and "theia-workspaces" not in current):
+        log("仍在 Manager，强制跳转 workspace_url...")
+        try:
+            page.goto(workspace_url, wait_until="domcontentloaded", timeout=180000)
+            page.wait_for_timeout(30000)
+        except Exception as e:
+            log(f"强制跳转提示：{e}")
+
+    # 7. 打开 Terminal
     open_terminal_and_activate(page)
 
-    # --------------------------------------------------------
-    # 5. 额外保持页面打开更长时间，确保节点完全激活
-    # --------------------------------------------------------
-    log("额外保持页面打开 40 秒，确保节点完全激活...")
-    page.wait_for_timeout(40000)
+    # 8. 最终保持
+    log("额外保持页面打开 45 秒，确保节点完全激活...")
+    page.wait_for_timeout(45000)
 
-    # 最后再截一次图
     try:
         page.screenshot(path="bas_ide_final.png", full_page=True)
         log("已保存最终截图：bas_ide_final.png")
     except Exception:
         pass
 
-    log(
-        f"Workspace 最终页面：{page.url}"
-    )
-
-    log(
-        "Workspace 访问完成，节点激活流程已执行！"
-    )
-
+    log(f"Workspace 最终页面：{page.url}")
+    log("Workspace 访问完成，节点激活流程已执行！")
     return True
 
 
@@ -1153,260 +1117,106 @@ def open_workspace(
 
 def main():
 
-    log(
-        "=========================================="
-    )
-
-    log(
-        " SAP BAS Dev Space Keep Alive"
-    )
-
-    log(
-        "=========================================="
-    )
+    log("==========================================")
+    log(" SAP BAS Dev Space Keep Alive")
+    log("==========================================")
 
     check_environment()
 
-    log(
-        f"BAS URL      : {BAS_URL}"
-    )
-
-    log(
-        f"Dev Space    : {DEVSPACE_NAME}"
-    )
-
-    log(
-        f"Dev Space ID : {DEVSPACE_ID}"
-    )
+    log(f"BAS URL      : {BAS_URL}")
+    log(f"Dev Space    : {DEVSPACE_NAME}")
+    log(f"Dev Space ID : {DEVSPACE_ID}")
 
     with sync_playwright() as p:
 
         browser = p.chromium.launch(
-            headless=True
+            headless=True,
+            args=[
+                "--disable-gpu",
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-web-security",
+                "--window-size=1366,768"
+            ]
         )
 
         context = browser.new_context(
-            viewport={
-                "width": 1366,
-                "height": 768
-            }
+            viewport={"width": 1366, "height": 768},
+            ignore_https_errors=True
         )
 
         page = context.new_page()
 
         try:
 
-            # =================================================
-            # 1. 登录
-            # =================================================
-
             if not login(page):
-
-                log(
-                    "登录失败，任务结束。"
-                )
-
+                log("登录失败，任务结束。")
                 sys.exit(1)
 
-            # =================================================
-            # 2. JWT
-            # =================================================
-
-            jwt = get_jwt(
-                context
-            )
+            jwt = get_jwt(context)
 
             if not jwt:
-
-                log(
-                    "获取 JWT 失败。"
-                )
-
+                log("获取 JWT 失败。")
                 sys.exit(1)
 
-            log(
-                "JWT 获取成功。"
-            )
+            log("JWT 获取成功。")
 
-            # =================================================
-            # 3. 查询 Workspace
-            # =================================================
-
-            workspace = get_workspace(
-                context,
-                jwt
-            )
+            workspace = get_workspace(context, jwt)
 
             if not workspace:
-
                 sys.exit(1)
 
-            # =================================================
-            # 4. 判断状态
-            # =================================================
-
-            status = get_status(
-                workspace
-            )
-
-            log(
-                f"{DEVSPACE_NAME} 当前状态：{status}"
-            )
-
-            # =================================================
-            # 5. STOPPED → 启动
-            # =================================================
+            status = get_status(workspace)
+            log(f"{DEVSPACE_NAME} 当前状态：{status}")
 
             if status == "STOPPED":
-
-                log(
-                    "检测到 Dev Space 已停止。"
-                )
-
-                success = start_workspace(
-                    context,
-                    jwt,
-                    workspace
-                )
-
+                log("检测到 Dev Space 已停止。")
+                success = start_workspace(context, jwt, workspace)
                 if not success:
-
                     sys.exit(1)
-
-                workspace = wait_until_running(
-                    context,
-                    jwt
-                )
-
+                workspace = wait_until_running(context, jwt)
                 if not workspace:
-
                     sys.exit(1)
 
-            # =================================================
-            # 6. STARTING
-            # =================================================
-
-            elif status in [
-                "STARTING",
-                "CREATING"
-            ]:
-
-                log(
-                    "Dev Space 正在启动。"
-                )
-
-                workspace = wait_until_running(
-                    context,
-                    jwt
-                )
-
+            elif status in ["STARTING", "CREATING"]:
+                log("Dev Space 正在启动。")
+                workspace = wait_until_running(context, jwt)
                 if not workspace:
-
                     sys.exit(1)
 
-            # =================================================
-            # 7. RUNNING
-            # =================================================
-
-            elif status in [
-                "RUNNING",
-                "STARTED"
-            ]:
-
-                log(
-                    "Dev Space 已经处于 RUNNING。"
-                )
+            elif status in ["RUNNING", "STARTED"]:
+                log("Dev Space 已经处于 RUNNING。")
 
             else:
+                log(f"未知 Dev Space 状态：{status}")
 
-                log(
-                    f"未知 Dev Space 状态：{status}"
-                )
-
-            # =================================================
-            # 8. 最终检查
-            # =================================================
-
-            workspace = get_workspace(
-                context,
-                jwt
-            )
-
+            workspace = get_workspace(context, jwt)
             if not workspace:
-
                 sys.exit(1)
 
-            final_status = get_status(
-                workspace
-            )
+            final_status = get_status(workspace)
+            log(f"最终状态：{final_status}")
 
-            log(
-                f"最终状态：{final_status}"
-            )
-
-            if final_status not in [
-                "RUNNING",
-                "STARTED"
-            ]:
-
-                log(
-                    "Dev Space 最终没有进入 RUNNING。"
-                )
-
+            if final_status not in ["RUNNING", "STARTED"]:
+                log("Dev Space 最终没有进入 RUNNING。")
                 sys.exit(1)
 
-            # =================================================
-            # 9. 打开 Workspace 并触发 Shell（增强版）
-            # =================================================
+            open_workspace(page, context, jwt, workspace)
 
-            open_workspace(
-                page,
-                context,
-                jwt,
-                workspace
-            )
-
-            log(
-                "=========================================="
-            )
-
-            log(
-                " Keep Alive 执行成功"
-            )
-
-            log(
-                f" Dev Space : {DEVSPACE_NAME}"
-            )
-
-            log(
-                " 状态      : RUNNING"
-            )
-
-            log(
-                " Workspace : 已访问且已触发节点联动"
-            )
-
-            log(
-                "=========================================="
-            )
+            log("==========================================")
+            log(" Keep Alive 执行成功")
+            log(f" Dev Space : {DEVSPACE_NAME}")
+            log(" 状态      : RUNNING")
+            log(" Workspace : 已访问且已触发节点联动")
+            log("==========================================")
 
         except Exception as e:
 
-            log(
-                "程序发生异常："
-            )
-
-            log(
-                str(e)
-            )
+            log("程序发生异常：")
+            log(str(e))
 
             try:
-
-                page.screenshot(
-                    path="bas_error.png",
-                    full_page=True
-                )
-
+                page.screenshot(path="bas_error.png", full_page=True)
             except Exception:
                 pass
 
