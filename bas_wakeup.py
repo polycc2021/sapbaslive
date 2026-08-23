@@ -28,9 +28,6 @@ DEVSPACE_ID = os.getenv(
     "ws-20y5a"
 )
 
-# 新增：直接指向项目开发环境的完整直链
-BAS_PROJECT_URL = os.getenv("BAS_PROJECT_URL")
-
 
 # ============================================================
 # 日志
@@ -778,8 +775,168 @@ def wait_until_running(
 
     return None
 
+
 # ============================================================
-# 模拟人为点击 BAS_DEVSPACE 对应的空间名称并唤醒开发环境
+# 在 Dev Space Manager 页面点击空间名字（最接近手动操作）
+# ============================================================
+
+def click_devspace_in_manager(page):
+    """
+    回到 index.html / Dev Space Manager，模拟手动点击空间名字。
+    这是激活节点最可靠的方式之一。
+    """
+
+    log("回到 Dev Space Manager 页面，准备点击空间名字...")
+
+    try:
+        page.goto(
+            BAS_URL + "/index.html",
+            wait_until="domcontentloaded",
+            timeout=120000
+        )
+        page.wait_for_timeout(8000)
+    except Exception as e:
+        log(f"打开 Manager 页面失败：{e}")
+        return False
+
+    # 多种可能的选择器（BAS UI 会变，尽量覆盖）
+    name_selectors = [
+        f'text="{DEVSPACE_NAME}"',
+        f'a:has-text("{DEVSPACE_NAME}")',
+        f'span:has-text("{DEVSPACE_NAME}")',
+        f'div:has-text("{DEVSPACE_NAME}")',
+        f'[title="{DEVSPACE_NAME}"]',
+        f'*:has-text("{DEVSPACE_NAME}")',
+    ]
+
+    for selector in name_selectors:
+        try:
+            loc = page.locator(selector).first
+            if loc.is_visible(timeout=3000):
+                log(f"找到空间名字元素，使用选择器：{selector}")
+                loc.click(timeout=5000)
+                log("已点击空间名字，等待 IDE 加载...")
+                page.wait_for_timeout(15000)
+                return True
+        except Exception:
+            continue
+
+    # 如果 iframe 里（老版 UI 常见）
+    try:
+        frames = page.frames
+        for frame in frames:
+            for selector in name_selectors:
+                try:
+                    loc = frame.locator(selector).first
+                    if loc.is_visible(timeout=2000):
+                        log(f"在 iframe 中找到空间名字：{selector}")
+                        loc.click(timeout=5000)
+                        log("已点击空间名字（iframe），等待 IDE 加载...")
+                        page.wait_for_timeout(15000)
+                        return True
+                except Exception:
+                    continue
+    except Exception as e:
+        log(f"iframe 查找提示：{e}")
+
+    log("未能在 Manager 页面点击到空间名字，将改用直接打开 workspace URL。")
+    return False
+
+
+# ============================================================
+# 打开 Terminal，真正触发 shell / bashrc / start.sh
+# ============================================================
+
+def open_terminal_and_activate(page):
+    """
+    在已打开的 Theia / BAS IDE 中打开集成终端。
+    打开终端会完整挂载用户 shell，从而执行 ~/.bashrc 和 start.sh。
+    """
+
+    log("尝试在 IDE 中打开 Terminal 以激活节点...")
+
+    # 等待 IDE 主界面出现（常见 Theia / VS Code 类选择器）
+    ide_ready_selectors = [
+        ".theia-app-shell",
+        "#theia-app-shell",
+        ".monaco-workbench",
+        ".theia-MainToolbar",
+        "[class*='theia']",
+        "body",
+    ]
+
+    ready = False
+    for sel in ide_ready_selectors:
+        try:
+            page.wait_for_selector(sel, timeout=20000)
+            ready = True
+            log(f"IDE 已就绪（检测到 {sel}）")
+            break
+        except Exception:
+            continue
+
+    if not ready:
+        log("未检测到典型 IDE 元素，但仍尝试打开 Terminal。")
+
+    page.wait_for_timeout(5000)
+
+    # 方法 1：键盘快捷键 Ctrl+` （最通用）
+    try:
+        log("使用快捷键 Ctrl+` 打开 Terminal...")
+        page.keyboard.press("Control+`")
+        page.wait_for_timeout(5000)
+        log("快捷键已发送。")
+    except Exception as e:
+        log(f"快捷键失败：{e}")
+
+    # 方法 2：Command Palette → Terminal: Create New Terminal
+    try:
+        log("尝试 Command Palette 打开 Terminal...")
+        page.keyboard.press("Control+Shift+P")
+        page.wait_for_timeout(2000)
+
+        # 输入命令
+        page.keyboard.type("Terminal: Create New Terminal", delay=50)
+        page.wait_for_timeout(1500)
+        page.keyboard.press("Enter")
+        page.wait_for_timeout(5000)
+        log("Command Palette 命令已执行。")
+    except Exception as e:
+        log(f"Command Palette 方式提示：{e}")
+
+    # 方法 3：菜单点击（如果可见）
+    menu_selectors = [
+        'text=Terminal',
+        'li:has-text("Terminal")',
+        '[aria-label*="Terminal"]',
+        'a:has-text("Terminal")',
+    ]
+    for sel in menu_selectors:
+        try:
+            menu = page.locator(sel).first
+            if menu.is_visible(timeout=2000):
+                menu.click()
+                page.wait_for_timeout(1000)
+                # 再点 New Terminal
+                new_term = page.locator('text=New Terminal').first
+                if new_term.is_visible(timeout=2000):
+                    new_term.click()
+                    log("通过菜单打开了 New Terminal。")
+                    page.wait_for_timeout(5000)
+                    break
+        except Exception:
+            continue
+
+    # 给 shell 足够时间执行 ~/.bashrc 和 start.sh
+    log("等待 shell 初始化并执行 start.sh（约 25 秒）...")
+    page.wait_for_timeout(25000)
+
+    log("Terminal 激活流程完成。")
+    return True
+
+
+# ============================================================
+# 打开 Workspace 并触发 Web Shell / 启动脚本（增强版）
 # ============================================================
 
 def open_workspace(
@@ -788,84 +945,134 @@ def open_workspace(
     jwt,
     workspace
 ):
-    # 1. 动态确定目标空间名称：优先提取 API 返回的名称，兜底使用环境变量 BAS_DEVSPACE
-    target_name = DEVSPACE_NAME
-    if workspace and isinstance(workspace, dict):
-        config = workspace.get("config", {})
-        labels = config.get("labels", {})
-        display_name = labels.get("ws-manager.devx.sap.com/displayname")
-        if display_name:
-            target_name = display_name
 
-    log("==========================================")
-    log(f"准备模拟人为点击空间名称：[{target_name}]...")
+    runtime = workspace.get(
+        "runtime",
+        {}
+    )
 
+    workspace_url = (
+        runtime
+        .get("url", {})
+        .get("theia")
+    )
+
+    # 如果 API 没有提供 URL，使用空间专属路由
+    if not workspace_url:
+
+        workspace_url = (
+            BAS_URL
+            + "/"
+            + DEVSPACE_ID
+        )
+
+    log(
+        "=========================================="
+    )
+    log(
+        "打开 Dev Space Workspace 并激活节点..."
+    )
+    log(
+        f"Workspace URL：{workspace_url}"
+    )
+
+    # --------------------------------------------------------
+    # 1. API 穿透触发（辅助）
+    # --------------------------------------------------------
     try:
-        # 2. 打开 BAS 控制台主页
-        index_url = BAS_URL + "/index.html"
-        log(f"打开 BAS 主页：{index_url}")
-        page.goto(index_url, wait_until="domcontentloaded", timeout=60000)
-        
-        # 留出 8 秒供 SAP UI5 渲染主页卡片列表
-        page.wait_for_timeout(8000)
 
-        log(f"正在主页查找名称为 [{target_name}] 的空间卡片...")
+        log("发送 AppRouter 会话激活 API 请求...")
 
-        target_page = None
+        headers = {
+            "X-Approuter-Authorization": f"Bearer {jwt}",
+            "Authorization": f"Bearer {jwt}"
+        }
 
-        # 3. 监听点击后打开的“新标签页”，并使用 JS 穿透 Shadow DOM 进行精准点击
-        try:
-            with context.expect_page(timeout=15000) as new_page_info:
-                # 注入 JS 深度搜索 Shadow DOM，匹配目标 space name 并触发真实 click
-                clicked = page.evaluate(
-                    '''(name) => {
-                        function findAndClick(root) {
-                            const nodes = root.querySelectorAll('*');
-                            for (let node of nodes) {
-                                if (node.shadowRoot) {
-                                    if (findAndClick(node.shadowRoot)) return true;
-                                }
-                                // 精准匹配空间的 Display Name
-                                if (node.textContent && node.textContent.trim() === name) {
-                                    const clickTarget = node.closest('a, button, ui5-card, ui5-link, [role="button"]') || node;
-                                    clickTarget.click();
-                                    return true;
-                                }
-                            }
-                            return false;
-                        }
-                        return findAndClick(document.body);
-                    }''',
-                    target_name
-                )
+        context.request.get(
+            f"{BAS_URL}/{DEVSPACE_ID}",
+            headers=headers,
+            timeout=30000
+        )
 
-                if clicked:
-                    log(f"成功通过 Shadow DOM 精准点击空间名称 [{target_name}]！")
-                else:
-                    log("Shadow DOM 穿透未命中，尝试常规 Selector 点击...")
-                    page.locator(f'text="{target_name}"').first.click()
+        context.request.get(
+            f"{BAS_URL}/ws-manager/api/v1/workspace/{DEVSPACE_ID}/instance",
+            headers=headers,
+            timeout=30000
+        )
 
-            # 成功抓取到点击后弹出的 IDE 开发环境新 Tab
-            target_page = new_page_info.value
-            log("成功捕获弹出的开发环境新标签页！")
+        # 再请求一次 theia 相关路径
+        if workspace_url:
+            context.request.get(
+                workspace_url,
+                headers=headers,
+                timeout=30000
+            )
 
-        except Exception as e:
-            log(f"未捕获到新窗口，将在原页面等待（提示: {e}）...")
-            target_page = page
-
-        # 4. 等待 IDE 挂载完成并初始化环境（触发节点自动启动命令）
-        log("正在等待开发环境完成初始化并跑完节点启动命令...")
-        
-        # 预留 35 秒，确保 IDE 前后端建立链接并触发脚本
-        target_page.wait_for_timeout(35000)
-
-        log(f"开发环境唤醒完成！当前 IDE 链接：{target_page.url}")
-        log("==========================================")
-        return True
+        log("API 触发请求已成功发出。")
 
     except Exception as e:
-        log(f"模拟点击打开开发环境过程失败：{e}")
-        return False
+
+        log(f"API 触发提示（不影响后续页面加载）：{e}")
+
+    # --------------------------------------------------------
+    # 2. 优先模拟「手动点击空间名字」
+    # --------------------------------------------------------
+    clicked = click_devspace_in_manager(page)
+
+    # --------------------------------------------------------
+    # 3. 如果点击失败，直接 goto workspace_url
+    # --------------------------------------------------------
+    if not clicked:
+        log("改用直接打开 Workspace URL...")
+        try:
+            page.goto(
+                workspace_url,
+                wait_until="domcontentloaded",
+                timeout=120000
+            )
+            page.wait_for_timeout(15000)
+        except Exception as e:
+            log(f"直接打开 Workspace 失败：{e}")
+            return False
+
+    # 确认当前是否已经进入 IDE
+    current = page.url
+    log(f"当前页面 URL：{current}")
+
+    # 如果还在 manager，再强制跳一次
+    if "index.html" in current or "ws-manager" in current or DEVSPACE_NAME in current and "theia" not in current.lower():
+        log("仍可能在 Manager 页面，强制跳转到 workspace_url...")
+        try:
+            page.goto(
+                workspace_url,
+                wait_until="domcontentloaded",
+                timeout=120000
+            )
+            page.wait_for_timeout(12000)
+        except Exception as e:
+            log(f"强制跳转提示：{e}")
+
+    # --------------------------------------------------------
+    # 4. 打开 Terminal，真正激活 shell 与 start.sh
+    # --------------------------------------------------------
+    open_terminal_and_activate(page)
+
+    # --------------------------------------------------------
+    # 5. 额外保持一段时间，确保后台进程稳定
+    # --------------------------------------------------------
+    log("额外保持页面打开 20 秒，确保节点完全激活...")
+    page.wait_for_timeout(20000)
+
+    log(
+        f"Workspace 最终页面：{page.url}"
+    )
+
+    log(
+        "Workspace 访问完成，节点激活流程已执行！"
+    )
+
+    return True
+
 
 # ============================================================
 # 主程序
@@ -898,12 +1105,6 @@ def main():
     log(
         f"Dev Space ID : {DEVSPACE_ID}"
     )
-
-    if BAS_PROJECT_URL:
-
-        log(
-            f"Project URL  : {BAS_PROJECT_URL}"
-        )
 
     with sync_playwright() as p:
 
@@ -1082,7 +1283,7 @@ def main():
                 sys.exit(1)
 
             # =================================================
-            # 9. 打开 Workspace 并触发 Shell
+            # 9. 打开 Workspace 并触发 Shell（增强版）
             # =================================================
 
             open_workspace(
