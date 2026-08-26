@@ -20,7 +20,7 @@ jobs:
 
     # Python 默认保持 BAS Workspace 55 分钟。
     # 每小时触发一次，避免一个 Job 无限运行。
-    timeout-minutes: 30
+    timeout-minutes: 10
 
     steps:
 
@@ -48,8 +48,8 @@ jobs:
           BAS_PROJECT_URL: ${{ secrets.BAS_PROJECT_URL }}
 
           # 每次 GitHub 运行时，让 BAS IDE 会话持续保持约 55 分钟
-          BAS_KEEPALIVE_SECONDS: "1200"
-          BAS_HEARTBEAT_INTERVAL: "120"
+          BAS_KEEPALIVE_SECONDS: "0"
+          BAS_HEARTBEAT_INTERVAL: "10"
 
         run: |
           python bas_wakeup.py
