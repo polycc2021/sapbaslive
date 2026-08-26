@@ -48,7 +48,7 @@ jobs:
           BAS_PROJECT_URL: ${{ secrets.BAS_PROJECT_URL }}
 
           # 每次 GitHub 运行时，让 BAS IDE 会话持续保持约 55 分钟
-          BAS_KEEPALIVE_SECONDS: "3300"
+          BAS_KEEPALIVE_SECONDS: "1200"
           BAS_HEARTBEAT_INTERVAL: "120"
 
         run: |
