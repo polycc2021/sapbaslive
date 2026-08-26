@@ -966,6 +966,141 @@ def open_terminal_and_activate(page):
     return True
 
 
+
+# ============================================================
+# 持续保持 Workspace 活跃
+# ============================================================
+
+KEEPALIVE_SECONDS = int(
+    os.getenv("BAS_KEEPALIVE_SECONDS", "3300")
+)
+
+HEARTBEAT_INTERVAL = int(
+    os.getenv("BAS_HEARTBEAT_INTERVAL", "120")
+)
+
+
+def keep_workspace_alive(page, context, workspace):
+    """
+    保持 BAS IDE 页面和 Workspace 会话处于活动状态。
+
+    注意：
+    - 这里不是简单 sleep，而是定期对 Workspace 发请求、
+      让浏览器页面保持前台活动，并做轻量鼠标活动。
+    - 默认保持 55 分钟，适合外部每 1 小时触发一次的模式。
+    - 如果 BAS 在这期间已经被服务端停止，则提前退出，
+      让下一次 GitHub 任务负责重新启动。
+    """
+
+    runtime = workspace.get("runtime", {})
+    workspace_url = (
+        runtime.get("url", {}).get("theia")
+        if isinstance(runtime, dict)
+        else None
+    )
+
+    if not workspace_url:
+        workspace_url = BAS_URL + "/" + DEVSPACE_ID
+
+    log(
+        f"开始持续保持 Workspace 活跃："
+        f"{KEEPALIVE_SECONDS} 秒，心跳间隔 {HEARTBEAT_INTERVAL} 秒"
+    )
+
+    start_time = time.time()
+    heartbeat_no = 0
+
+    while time.time() - start_time < KEEPALIVE_SECONDS:
+
+        heartbeat_no += 1
+        elapsed = int(time.time() - start_time)
+        remain = max(0, KEEPALIVE_SECONDS - elapsed)
+
+        try:
+            # ----------------------------------------------------
+            # 1. 确认当前页面仍然是 BAS / Theia
+            # ----------------------------------------------------
+            current_url = page.url
+
+            if (
+                "accounts.sap.com" in current_url
+                or "login" in current_url.lower()
+            ):
+                log("检测到页面回到了登录页面，停止本次持续保活。")
+                return False
+
+            # ----------------------------------------------------
+            # 2. 对 Workspace 做轻量 HTTP 访问
+            # ----------------------------------------------------
+            try:
+                response = context.request.get(
+                    workspace_url,
+                    timeout=30000
+                )
+
+                log(
+                    f"Heartbeat #{heartbeat_no}："
+                    f"Workspace HTTP {response.status}，"
+                    f"剩余约 {remain}s"
+                )
+
+            except Exception as e:
+                log(f"Heartbeat #{heartbeat_no}：Workspace 请求提示：{e}")
+
+            # ----------------------------------------------------
+            # 3. 真实浏览器活动
+            # ----------------------------------------------------
+            try:
+                page.bring_to_front()
+
+                # 在 IDE 空白区域做轻量鼠标移动，
+                # 避免点击按钮、编辑文件或改变工作区状态。
+                page.mouse.move(
+                    680 + (heartbeat_no % 5),
+                    380 + (heartbeat_no % 5),
+                    steps=5
+                )
+
+            except Exception as e:
+                log(f"Heartbeat #{heartbeat_no}：浏览器活动提示：{e}")
+
+            # ----------------------------------------------------
+            # 4. 检查 IDE 页面是否仍然存在
+            # ----------------------------------------------------
+            try:
+                body = page.locator("body").inner_text(timeout=3000)
+
+                if not body or len(body.strip()) < 20:
+                    log(
+                        f"Heartbeat #{heartbeat_no}："
+                        "页面内容异常，准备结束本次保活。"
+                    )
+                    return False
+
+            except Exception as e:
+                log(
+                    f"Heartbeat #{heartbeat_no}："
+                    f"页面检查提示：{e}"
+                )
+
+            # ----------------------------------------------------
+            # 5. 每次只等待一个心跳周期
+            # ----------------------------------------------------
+            sleep_seconds = min(
+                HEARTBEAT_INTERVAL,
+                max(1, int(KEEPALIVE_SECONDS - (time.time() - start_time)))
+            )
+
+            time.sleep(sleep_seconds)
+
+        except Exception as e:
+            log(f"Heartbeat #{heartbeat_no} 发生异常：{e}")
+            time.sleep(10)
+
+    log("持续 Workspace 保活时间达到设定值。")
+    return True
+
+
 # ============================================================
 # 打开 Workspace（核心增强版）
 # ============================================================
@@ -1203,11 +1338,28 @@ def main():
 
             open_workspace(page, context, jwt, workspace)
 
+            # ----------------------------------------------------
+            # 持续保持 Workspace 活跃
+            # ----------------------------------------------------
+            keep_alive_ok = keep_workspace_alive(
+                page,
+                context,
+                workspace
+            )
+
             log("==========================================")
-            log(" Keep Alive 执行成功")
+            log(" Keep Alive 执行完成")
             log(f" Dev Space : {DEVSPACE_NAME}")
             log(" 状态      : RUNNING")
             log(" Workspace : 已访问且已触发节点联动")
+            log(
+                f" 持续保活  : "
+                f"{KEEPALIVE_SECONDS} 秒"
+            )
+            log(
+                f" 保活结果  : "
+                f"{'正常完成' if keep_alive_ok else '提前结束'}"
+            )
             log("==========================================")
 
         except Exception as e:
