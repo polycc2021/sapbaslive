@@ -2,9 +2,8 @@ name: SAP BAS Keep Alive
 
 on:
   workflow_dispatch:
-
-  # schedule:
-    # - cron: "*/25 * * * *"
+  #schedule:
+    #- cron: "0 * * * *"
 
 permissions:
   contents: read
@@ -19,7 +18,9 @@ jobs:
 
     runs-on: ubuntu-latest
 
-    timeout-minutes: 15
+    # Python 默认保持 BAS Workspace 55 分钟。
+    # 每小时触发一次，避免一个 Job 无限运行。
+    timeout-minutes: 65
 
     steps:
 
@@ -45,6 +46,10 @@ jobs:
           BAS_DEVSPACE: ${{ secrets.BAS_DEVSPACE }}
           BAS_DEVSPACE_ID: ${{ secrets.BAS_DEVSPACE_ID }}
           BAS_PROJECT_URL: ${{ secrets.BAS_PROJECT_URL }}
+
+          # 每次 GitHub 运行时，让 BAS IDE 会话持续保持约 55 分钟
+          BAS_KEEPALIVE_SECONDS: "3300"
+          BAS_HEARTBEAT_INTERVAL: "120"
 
         run: |
           python bas_wakeup.py
